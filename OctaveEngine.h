@@ -286,18 +286,22 @@ struct Detuner
     {
         buf[(size_t) wp] = in;
         if (amount < 0.005f) { outL = outR = in; advance(); return; }
-        const float a2    = amount * amount;
-        const float rate  = 0.18f + 6.2f * a2;          // Hz
-        const float depth = (0.25f + 5.0f * a2) * 0.001f * fs;
-        const float base  = 0.008f * fs;
+        // low settings = slow chorus (12-string), high settings = fast rotary / vibrato.
+        // speed and depth both rise, the pitch swing stays musical (about +-0.5 semitone max)
+        const float rate  = 0.15f + 6.5f * amount * amount;                       // 0.15 .. 6.65 Hz
+        const float depth = (0.40f + 3.0f * amount * (1.0f - 0.65f * amount)) * 0.001f * fs;
+        const float base  = 0.006f * fs;
         phase += rate / fs; if (phase >= 1.0f) phase -= 1.0f;
         const float l = std::sin (6.2831853f * phase);
         const float r = std::sin (6.2831853f * (phase + 0.25f));
-        const float wet = std::min (1.0f, amount * 3.0f);
         const float dl = read (base + depth * (0.5f + 0.5f * l));
         const float dr = read (base + depth * (0.5f + 0.5f * r));
-        outL = in * (1.0f - 0.5f * wet) + dl * 0.62f * wet;
-        outR = in * (1.0f - 0.5f * wet) + dr * 0.62f * wet;
+        const float wet = std::min (1.0f, amount * 3.0f);                                  // chorus amount
+        const float vib = std::min (0.85f, std::max (0.0f, (amount - 0.55f) / 0.35f) * 0.85f); // pure pitch wobble
+        const float cl = in * (1.0f - 0.5f * wet) + dl * 0.62f * wet;
+        const float cr = in * (1.0f - 0.5f * wet) + dr * 0.62f * wet;
+        outL = cl * (1.0f - vib) + dl * vib;
+        outR = cr * (1.0f - vib) + dr * vib;
         advance();
     }
 private:

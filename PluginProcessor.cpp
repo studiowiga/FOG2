@@ -11,7 +11,7 @@ const std::vector<FactoryPreset>& getFactoryPresets()
     //                                  dry   -2    -1    +1    +2   attack  LP  detune | dryFx Q
     static const std::vector<FactoryPreset> list {
         { "Organ Pad",             mk ({ 0.60f, 0.26f, 0.70f, 0.62f, 0.30f, 0.45f, 0.62f, 0.35f }, 3, 0) },
-        { "Theremin-ish",          mk ({ 0.00f, 0.00f, 0.00f, 0.86f, 0.22f, 0.36f, 0.44f, 0.58f }, 0, 2) },
+        { "Theremin-ish",          mk ({ 0.00f, 0.00f, 0.00f, 0.92f, 0.00f, 0.56f, 0.50f, 0.88f }, 0, 1) },
         { "Cello",                 mk ({ 0.00f, 0.00f, 0.86f, 0.10f, 0.00f, 0.50f, 0.40f, 0.12f }, 1, 1) },
         { "Lower + Upper Clean",   mk ({ 0.80f, 0.00f, 0.62f, 0.58f, 0.00f, 0.00f, 1.00f, 0.00f }, 0, 0) },
         { "Organ Drawbars",        mk ({ 0.70f, 0.56f, 0.70f, 0.66f, 0.52f, 0.00f, 0.80f, 0.28f }, 2, 0) },

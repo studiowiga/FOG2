@@ -18,15 +18,16 @@ namespace
     constexpr float faderW = 46.0f, faderY0 = 150.0f, faderY1 = 492.0f;
     constexpr float capW = 30.3f, capH = 60.7f;
 
-    const juce::Point<float> dryLed   { 675.6f, 153.3f },  dryBtn { 675.2f, 250.7f };
-    const juce::Point<float> qLed     { 675.6f, 353.8f },  qBtn   { 675.2f, 452.5f };
-    constexpr float btnImg = 67.4f, btnR = 32.0f;
+    const juce::Point<float> dryLed   { 675.9f, 158.7f },  dryBtn { 675.26f, 252.04f };
+    const juce::Point<float> qLed     { 676.3f, 356.8f },  qBtn   { 675.10f, 452.70f };
+    constexpr float dryLedR = 13.5f, qLedR = 14.0f;
+    constexpr float btnImg = 67.39f, btnR = 32.0f;
     const juce::Point<float> knobC    { 1094.8f, 144.9f };
     constexpr float knobR = 66.0f;
     constexpr float presetLedX = 1091.3f, presetLedY0 = 245.1f, presetLedDY = 38.94f;
     const juce::Point<float> redPreset { 469.2f, 765.2f }, redBypass { 780.3f, 764.9f };
-    const juce::Point<float> fsPreset  { 270.9f, 775.7f }, fsBypass  { 982.6f, 782.4f };
-    constexpr float fsImg = 73.5f;
+    const juce::Point<float> fsPreset  { 268.89f, 791.85f }, fsBypass  { 986.27f, 792.18f };
+    constexpr float fsPresetImg = 67.39f, fsBypassImg = 68.07f, fsHitR = 34.0f;
 
     const juce::Colour cream   (0xfff1e9dc);
     const juce::Colour bubbleBg(0xe0201010);
@@ -52,6 +53,32 @@ namespace
 
 class PedalContent;
 static void showMainMenu (PedalContent&, juce::Component* from);
+
+// menus are drawn at normal desktop size (not scaled down with the pedal) and with a larger font
+struct MenuLnF : public juce::LookAndFeel_V4
+{
+    MenuLnF()
+    {
+        setColour (juce::PopupMenu::backgroundColourId,            juce::Colour (0xff231a18));
+        setColour (juce::PopupMenu::textColourId,                  juce::Colour (0xfff1e9dc));
+        setColour (juce::PopupMenu::headerTextColourId,            juce::Colour (0xffffb04a));
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, juce::Colour (0xffa8322a));
+        setColour (juce::PopupMenu::highlightedTextColourId,       juce::Colours::white);
+    }
+    juce::Font getPopupMenuFont() override { return juce::Font (juce::FontOptions (17.0f)); }
+    void getIdealPopupMenuItemSize (const juce::String& text, bool isSeparator, int standardHeight, int& w, int& h) override
+    {
+        LookAndFeel_V4::getIdealPopupMenuItemSize (text, isSeparator, standardHeight, w, h);
+        if (! isSeparator) h = juce::jmax (h, 30);
+        w += 24;
+    }
+};
+static MenuLnF& menuLnF() { static MenuLnF l; return l; }
+static juce::PopupMenu::Options menuOptions()
+{
+    const auto p = juce::Desktop::getMousePosition();
+    return juce::PopupMenu::Options().withTargetScreenArea ({ p.x, p.y, 1, 1 }).withMinimumWidth (300).withStandardItemHeight (30);
+}
 
 // =============================================================================
 //  Fader: slot + white plastic cap, the cap follows the mouse 1:1
@@ -109,15 +136,21 @@ public:
     void paint (juce::Graphics& g) override
     {
         if (! face.isValid()) face = img (BinaryData::button_up_png, BinaryData::button_up_pngSize);
-        auto c = getLocalBounds().toFloat().getCentre();
+        const auto c = localCentre();
         g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
-        const float d = pressed ? btnImg * 0.93f : btnImg;
-        auto r = juce::Rectangle<float> (d, d).withCentre (c.translated (0.0f, pressed ? 1.2f : 0.0f));
+        const float d = pressed ? btnImg * 0.965f : btnImg;          // sinks a little, around its own centre
+        auto r = juce::Rectangle<float> (d, d).withCentre (c);
         g.drawImage (face, r);
-        if (pressed) { g.setColour (juce::Colours::black.withAlpha (0.16f)); g.fillEllipse (r.reduced (btnImg * 0.04f)); }
+        if (pressed)
+        {
+            juce::ColourGradient sh (juce::Colours::black.withAlpha (0.30f), c.x, c.y - d * 0.5f, juce::Colours::black.withAlpha (0.06f), c.x, c.y + d * 0.2f, false);
+            g.setGradientFill (sh); g.fillEllipse (r.reduced (btnImg * 0.05f));
+        }
     }
     juce::Image face;
-    bool hitTest (int x, int y) override { return getLocalBounds().toFloat().getCentre().getDistanceFrom ({ (float) x, (float) y }) < btnR + 2; }
+    juce::Point<float> centre;     // exact centre in pedal coordinates
+    juce::Point<float> localCentre() const { return centre - getPosition().toFloat(); }
+    bool hitTest (int x, int y) override { return localCentre().getDistanceFrom ({ (float) x, (float) y }) < btnR + 2; }
     void mouseDown (const juce::MouseEvent& e) override
     {
         if (e.mods.isPopupMenu()) { showMainMenu (owner, this); return; }
@@ -203,51 +236,61 @@ public:
         if (e.mods.isPopupMenu()) { showMainMenu (owner, this); popup = true; return; }
         popup = false; down = true; dragged = false; saved = false;
         downTime = juce::Time::getMillisecondCounter();
-        startSel = proc.getSelected();
+        lastPos = e.position; acc = 0.0f; travel = 0.0f;
     }
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (popup || ! down) return;
-        const float d = (float) (e.getDistanceFromDragStartX() - e.getDistanceFromDragStartY());
-        if (! dragged && std::abs (d) > 4.0f) dragged = true;
+        const float d = (e.position.x - lastPos.x) - (e.position.y - lastPos.y);   // right / up = clockwise
+        lastPos = e.position;
+        travel += std::abs (d);
+        if (! dragged && travel > 4.0f) dragged = true;
         if (! dragged) return;
-        const float steps = d / 28.0f;
-        const int  s = (int) std::floor (steps);
-        const int sel = ((startSel + s) % 8 + 8) % 8;
-        if (sel != proc.getSelected()) proc.selectPreset (sel);
-        dragFrac = steps - (float) s;
+        acc += d;
+        const int sel = proc.getSelected();
+        // a detent holds the knob until the mouse has really pushed past it
+        if (acc >= kStep && sel < 7)       { proc.selectPreset (sel + 1); acc = 0.0f; clickTime = juce::Time::getMillisecondCounter(); }
+        else if (acc <= -kStep && sel > 0) { proc.selectPreset (sel - 1); acc = 0.0f; clickTime = juce::Time::getMillisecondCounter(); }
+        // at the end stops it just doesn't move
+        if ((sel == 7 && acc > 0) || (sel == 0 && acc < 0)) acc = juce::jlimit (-kStep * 0.3f, kStep * 0.3f, acc);
     }
     void mouseUp (const juce::MouseEvent&) override
     {
         if (popup) { popup = false; return; }
         if (down && ! dragged && ! saved && holdMs() < 2000) proc.loadPreset (proc.getSelected());
-        down = false; dragged = false; dragFrac = 0;
+        down = false; dragged = false; acc = 0.0f;
     }
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
     {
+        const auto now = juce::Time::getMillisecondCounter();
         wheelAcc += (w.deltaY != 0 ? w.deltaY : -w.deltaX) * (w.isReversed ? -1.0f : 1.0f);
-        if (std::abs (wheelAcc) >= 0.12f)
+        if (std::abs (wheelAcc) >= 0.10f && now - clickTime > 110)          // one click per notch
         {
             const int dir = wheelAcc > 0 ? 1 : -1; wheelAcc = 0;
-            proc.selectPreset (((proc.getSelected() + dir) % 8 + 8) % 8);
+            const int sel = juce::jlimit (0, 7, proc.getSelected() + dir);
+            if (sel != proc.getSelected()) { proc.selectPreset (sel); clickTime = now; }
         }
     }
 private:
+    static constexpr float kStep = 26.0f;       // pixels of mouse travel per detent
     juce::uint32 holdMs() const { return juce::Time::getMillisecondCounter() - downTime; }
     void timerCallback() override
     {
         if (down && ! dragged && ! saved && holdMs() >= 3000) { proc.savePreset (proc.getSelected()); saved = true; }
-        // continuous angle between detents while dragging, eased otherwise
+        // sits on its detent; while pushed it only leans a few degrees (resistance), then clicks over
         float target = targetAngle (proc.getSelected());
-        if (down && dragged) target += juce::degreesToRadians (7.0f) * std::sin (juce::MathConstants<float>::pi * juce::jlimit (0.0f, 1.0f, dragFrac)) * (dragFrac < 0.5f ? 1.0f : -1.0f);
-        // wrap from 8 to 1 the short way
+        if (down && dragged) target += juce::degreesToRadians (5.0f) * juce::jlimit (-1.0f, 1.0f, acc / kStep);
         const float diff = target - angle;
-        if (std::abs (diff) > 0.0005f) { angle += diff * (down && dragged ? 0.55f : 0.35f); repaint(); }
+        const bool justClicked = juce::Time::getMillisecondCounter() - clickTime < 90;
+        if (std::abs (diff) > 0.0005f) { angle += diff * (justClicked ? 0.75f : 0.5f); repaint(); }
     }
+    juce::Point<float> lastPos;
+    float acc = 0.0f, travel = 0.0f;
+    juce::uint32 clickTime = 0;
     FogProcessor& proc; PedalContent& owner;
-    float angle = 0, dragFrac = 0, wheelAcc = 0;
+    float angle = 0, wheelAcc = 0;
     bool down = false, dragged = false, saved = false, popup = false, hover = false;
-    int startSel = 0; juce::uint32 downTime = 0;
+    juce::uint32 downTime = 0;
 };
 
 // =============================================================================
@@ -265,14 +308,21 @@ public:
     std::function<void (juce::Component*)> onMenu;
     void paint (juce::Graphics& g) override
     {
-        auto c = getLocalBounds().toFloat().getCentre();
+        const auto c = localCentre();
+        const float size = which == 1 ? fsPresetImg : fsBypassImg;
         g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
-        const float d = pressed ? fsImg * 0.95f : fsImg;
-        auto r = juce::Rectangle<float> (d, d).withCentre (c.translated (0.0f, pressed ? 1.2f : 0.0f));
+        const float d = pressed ? size * 0.975f : size;              // pushed in, centred on itself
+        auto r = juce::Rectangle<float> (d, d).withCentre (c);
         g.drawImage (up, r);
-        if (pressed) { g.setColour (juce::Colours::black.withAlpha (0.18f)); g.fillEllipse (r.reduced (fsImg * 0.03f)); }
+        if (pressed)
+        {
+            juce::ColourGradient sh (juce::Colours::black.withAlpha (0.32f), c.x, c.y - d * 0.5f, juce::Colours::black.withAlpha (0.08f), c.x, c.y + d * 0.25f, false);
+            g.setGradientFill (sh); g.fillEllipse (r.reduced (size * 0.02f));
+        }
     }
-    bool hitTest (int x, int y) override { return getLocalBounds().toFloat().getCentre().getDistanceFrom ({ (float) x, (float) y }) < 40.0f; }
+    juce::Point<float> centre;
+    juce::Point<float> localCentre() const { return centre - getPosition().toFloat(); }
+    bool hitTest (int x, int y) override { return localCentre().getDistanceFrom ({ (float) x, (float) y }) < fsHitR; }
     void mouseDown (const juce::MouseEvent& e) override
     {
         if (e.mods.isPopupMenu()) { if (onMenu) onMenu (this); return; }
@@ -322,7 +372,7 @@ public:
         qBtnC->onPress = [cycle] { cycle (FogIDs::q, "FILTER Q", { "1 (FLAT)", "2", "3", "4 (PEAK)" }); };
         for (auto [b, c] : { std::pair<PlasticButton*, juce::Point<float>> { dryBtnC.get(), dryBtn }, { qBtnC.get(), qBtn } })
         {
-            b->setBounds (juce::Rectangle<int> (76, 76).withCentre (c.toInt()));
+            b->setBounds (juce::Rectangle<int> (76, 76).withCentre (c.toInt())); b->centre = c;
             addAndMakeVisible (b);
         }
         knob = std::make_unique<PresetKnob> (proc, *this);
@@ -335,8 +385,8 @@ public:
         fsByp->onPress = [this] { proc.toggleBypass(); };
         fsPre->onMenu = [this] (juce::Component* c) { showFootswitchMenu (1, c); };
         fsByp->onMenu = [this] (juce::Component* c) { showFootswitchMenu (2, c); };
-        fsPre->setBounds (juce::Rectangle<int> (90, 90).withCentre (fsPreset.toInt()));
-        fsByp->setBounds (juce::Rectangle<int> (90, 90).withCentre (fsBypass.toInt()));
+        fsPre->setBounds (juce::Rectangle<int> (90, 90).withCentre (fsPreset.toInt())); fsPre->centre = fsPreset;
+        fsByp->setBounds (juce::Rectangle<int> (90, 90).withCentre (fsBypass.toInt())); fsByp->centre = fsBypass;
         addAndMakeVisible (*fsPre); addAndMakeVisible (*fsByp);
 
         startTimerHz (30);
@@ -426,9 +476,9 @@ private:
         const auto now = Time::getMillisecondCounter();
         const int df = st.dryFx;
         const Colour dfCol = df == 1 ? Colour (0xffff2a1a) : df == 2 ? Colour (0xff2cff4a) : Colour (0xffffa514);
-        lightLed (g, dryLed, 12.5f, dfCol, df == 0 ? 0.0f : 1.0f);
+        lightLed (g, dryLed, dryLedR, dfCol, df == 0 ? 0.0f : 1.0f);
         const float ql[4] = { 0.0f, 0.35f, 0.66f, 1.0f };
-        lightLed (g, qLed, 12.0f, Colour (0xffffa20c), ql[st.q]);
+        lightLed (g, qLed, qLedR, Colour (0xffffa20c), ql[st.q]);
 
         const bool holdBlink = knob->isHoldBlinking();
         const bool saveBlink = now - proc.getSaveBlinkStart() < 450;
@@ -510,22 +560,23 @@ static void showMainMenu (PedalContent& pc, juce::Component* from)
     auto& proc = pc.proc;
     auto* ed = &pc.editor;
     PopupMenu m;
+    m.setLookAndFeel (&menuLnF());
     m.addSectionHeader ("Fog Z  -  Studio Wiga");
 
-    PopupMenu size;
+    PopupMenu size; size.setLookAndFeel (&menuLnF());
     const float cur = ed->getScale();
     for (int i = 0; i < 4; ++i)
         size.addItem (100 + i, String (roundToInt (kMenuScales[i] * 100)) + " %" + (i == 0 ? " (default)" : ""),
                       true, std::abs (cur - kMenuScales[i]) < 0.01f);
     m.addSubMenu ("Plugin size", size);
 
-    PopupMenu fac;
+    PopupMenu fac; fac.setLookAndFeel (&menuLnF());
     const auto& list = getFactoryPresets();
     for (int i = 0; i < (int) list.size(); ++i) fac.addItem (200 + i, String (i + 1) + ". " + list[(size_t) i].name);
     m.addSubMenu ("Factory sounds", fac);
     m.addItem (300, "Restore factory sounds in presets 1-8");
 
-    PopupMenu midi;
+    PopupMenu midi; midi.setLookAndFeel (&menuLnF());
     auto ccName = [] (int cc) { return cc < 0 ? String ("none") : "CC " + String (cc); };
     midi.addItem (401, "Preset footswitch: " + ccName (proc.ccPreset.load()) + "  -  learn...", true, proc.learnTarget.load() == 1);
     midi.addItem (402, "Bypass footswitch: " + ccName (proc.ccBypass.load()) + "  -  learn...", true, proc.learnTarget.load() == 2);
@@ -535,7 +586,7 @@ static void showMainMenu (PedalContent& pc, juce::Component* from)
     m.addSubMenu ("MIDI", midi);
 
     Component::SafePointer<Component> sp (from);
-    m.showMenuAsync (PopupMenu::Options().withTargetComponent (from), [sp, ed, &proc] (int r)
+    m.showMenuAsync (menuOptions(), [sp, ed, &proc] (int r)
     {
         if (sp == nullptr || r == 0) return;
         if (r >= 100 && r < 104)      ed->setScale (kMenuScales[r - 100]);
@@ -550,7 +601,7 @@ static void showMainMenu (PedalContent& pc, juce::Component* from)
 void PedalContent::showFootswitchMenu (int which, juce::Component* from)
 {
     using namespace juce;
-    PopupMenu m;
+    PopupMenu m; m.setLookAndFeel (&menuLnF());
     const int cc = which == 1 ? proc.ccPreset.load() : proc.ccBypass.load();
     m.addSectionHeader (which == 1 ? "PRESET footswitch" : "BYPASS footswitch");
     m.addItem (1, "MIDI learn (move a pedal / button now)", true, proc.learnTarget.load() == which);
@@ -560,7 +611,7 @@ void PedalContent::showFootswitchMenu (int which, juce::Component* from)
     m.addItem (4, "More...");
     Component::SafePointer<PedalContent> sp (this);
     Component::SafePointer<Component> src (from);
-    m.showMenuAsync (PopupMenu::Options().withTargetComponent (from), [sp, src, which] (int r)
+    m.showMenuAsync (menuOptions(), [sp, src, which] (int r)
     {
         if (sp == nullptr) return;
         auto& p = sp->proc;
