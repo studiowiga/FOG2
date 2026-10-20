@@ -272,17 +272,14 @@ public:
         }
     }
 private:
-    static constexpr float kStep = 26.0f;       // pixels of mouse travel per detent
+    static constexpr float kStep = 18.0f;       // pixels of mouse travel per detent
     juce::uint32 holdMs() const { return juce::Time::getMillisecondCounter() - downTime; }
     void timerCallback() override
     {
         if (down && ! dragged && ! saved && holdMs() >= 3000) { proc.savePreset (proc.getSelected()); saved = true; }
-        // sits on its detent; while pushed it only leans a few degrees (resistance), then clicks over
-        float target = targetAngle (proc.getSelected());
-        if (down && dragged) target += juce::degreesToRadians (5.0f) * juce::jlimit (-1.0f, 1.0f, acc / kStep);
-        const float diff = target - angle;
-        const bool justClicked = juce::Time::getMillisecondCounter() - clickTime < 90;
-        if (std::abs (diff) > 0.0005f) { angle += diff * (justClicked ? 0.75f : 0.5f); repaint(); }
+        // rotary switch: the knob never moves between presets, it jumps straight to the next notch
+        const float target = targetAngle (proc.getSelected());
+        if (std::abs (target - angle) > 0.0005f) { angle = target; repaint(); }
     }
     juce::Point<float> lastPos;
     float acc = 0.0f, travel = 0.0f;

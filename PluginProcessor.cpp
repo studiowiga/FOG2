@@ -18,7 +18,7 @@ const std::vector<FactoryPreset>& getFactoryPresets()
         { "Glass Choir",           mk ({ 0.56f, 0.00f, 0.40f, 0.68f, 0.82f, 0.60f, 0.74f, 0.40f }, 1, 1) },
         { "Sub Synth Bass",        mk ({ 0.20f, 0.66f, 0.85f, 0.00f, 0.00f, 0.08f, 0.30f, 0.00f }, 2, 3) },
         { "12-String Shimmer",     mk ({ 0.80f, 0.00f, 0.00f, 0.62f, 0.00f, 0.00f, 1.00f, 0.22f }, 0, 0) },
-        { "Reverse Swell",         mk ({ 0.50f, 0.00f, 0.66f, 0.55f, 0.00f, 0.82f, 0.66f, 0.20f }, 1, 0) },
+        { "Reverse Swell",         mk ({ 0.62f, 0.00f, 0.92f, 0.84f, 0.30f, 0.80f, 0.78f, 0.18f }, 1, 0) },
         { "Baritone Growl",        mk ({ 0.35f, 0.30f, 0.85f, 0.00f, 0.00f, 0.00f, 0.55f, 0.00f }, 0, 2) },
         { "Leslie Rotary",         mk ({ 0.62f, 0.00f, 0.66f, 0.66f, 0.48f, 0.00f, 0.70f, 0.85f }, 3, 0) },
         { "Fog Horn",              mk ({ 0.00f, 0.80f, 0.55f, 0.25f, 0.00f, 0.30f, 0.25f, 0.15f }, 2, 3) },
@@ -112,7 +112,7 @@ void FogProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     for (int i = 0; i < 8; ++i) { sm[(size_t) i].reset (sampleRate, 0.03); sm[(size_t) i].setCurrentAndTargetValue (raw[(size_t) i]->load()); }
     bypassMix.reset (sampleRate, 0.015);
     bypassMix.setCurrentAndTargetValue (bypassParam->get() ? 1.0f : 0.0f);
-    dryEnv = 1.0f; fastEnv = slowEnv = 0.0f; dryHold = 0; dryRetrig = false;
+    dryEnv = 1.0f; fastEnv = slowEnv = 0.0f; dryHold = 0; dryRetrig = false; rmsEnv = peakHold = 0.0f; susGain = 1.0f;
 }
 
 void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -183,6 +183,11 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
     const float rise  = attSec > 0 ? 1.0f / (attSec * (float) sr) : 1.0f;
     const int   hold  = (int) (0.08 * sr);
     const float hpCoef = 1.0f - std::exp (-2.0f * 3.14159265f * 16.0f / (float) sr);
+    const float rmsC = 1.0f - std::exp (-1.0f / (0.040f * (float) sr));
+    const float susC = 1.0f - std::exp (-1.0f / (0.030f * (float) sr));
+    const float holdDecay = std::pow (10.0f, -4.0f / 20.0f / (float) sr);        // the held level fades 4 dB/s
+    const float attNorm = juce::jlimit (0.0f, 1.0f, (raw[5]->load() - 0.02f) / 0.98f);
+    const float susMax = 1.0f + 2.8f * attNorm;                                    // up to about +11 dB
 
     float* outL = buffer.getWritePointer (0);
     float* outR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
@@ -215,13 +220,28 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
         }
         else { dryEnv = 1.0f; dryRetrig = false; }
 
-        float low = gM2 * voices[0][i] + gM1 * voices[1][i];
+        // ---- swell sustain: with ATTACK on, the decaying note is held up while it swells in,
+        //      so the swell ends loud (like a compressed volume-pedal swell) ----
+        float sus = 1.0f;
+        if (attSec > 0.0f)
+        {
+            rmsEnv += (ax * ax - rmsEnv) * rmsC;
+            const float lev = std::sqrt (rmsEnv);
+            if (fastEnv > 2.2f * slowEnv + 1.0e-4f && fastEnv > 0.004f) peakHold = lev;     // new note
+            peakHold = std::max (lev, peakHold * holdDecay);
+            const float target = lev > 2.0e-4f ? juce::jlimit (1.0f, susMax, peakHold / lev) : 1.0f;
+            susGain += (target - susGain) * susC;
+            sus = susGain;
+        }
+        else susGain = 1.0f;
+
+        float low = (gM2 * voices[0][i] + gM1 * voices[1][i]) * sus;
         hpState += (low - hpState) * hpCoef; low -= hpState;          // 16 Hz rumble filter on the sub octaves
-        const float up  = gP1 * voices[2][i] + gP2 * voices[3][i];
+        const float up  = (gP1 * voices[2][i] + gP2 * voices[3][i]) * sus;
         float upL, upR; detUp.process (up, det, upL, upR);
 
         float dL = inL[i] * gDry, dR = inR[i] * gDry;
-        if (dryFx >= 1) { dL *= dryEnv; dR *= dryEnv; }
+        if (dryFx >= 1) { const float sw = dryEnv * dryEnv * sus; dL *= sw; dR *= sw; }   // same swell curve as the octaves
         if (dryFx == 3) { float t; detDryL.process (dL, det, dL, t); detDryR.process (dR, det, t, dR); }
 
         const bool dryThroughLp = dryFx >= 2;

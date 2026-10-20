@@ -102,6 +102,7 @@ private:
     std::array<juce::SmoothedValue<float>, 8> sm;
     juce::SmoothedValue<float> bypassMix;
     float dryEnv = 1.0f, fastEnv = 0, slowEnv = 0, dryHold = 0; bool dryRetrig = false;
+    float rmsEnv = 0.0f, peakHold = 0.0f, susGain = 1.0f;
     double sr = 48000.0;
     int preparedBlock = 512;
     float hpState = 0.0f;

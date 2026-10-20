@@ -24,12 +24,12 @@ Même taille que Ring Think : 665 × 498 par défaut (67 %), jamais plus petite.
 |---|---|
 | DRY OUTPUT | son direct (100 % au repère 80 %) |
 | -2 / -1 / +1 / +2 OCTAVES | niveau de chaque voix (polyphonique) |
-| ATTACK | montée en volume note par note (en bas = coupé, jusqu'à 3 s) |
+| ATTACK | montée en volume note par note (en bas = coupé, jusqu'à 3 s), courbe lente au début puis forte ; la note est soutenue pendant la montée (jusqu'à +11 dB) pour finir fort |
 | LP FILTER | filtre passe-bas 2 pôles 50 Hz → 18 kHz |
 | DETUNE | voix +1 et +2 : chorus lent en bas, chorus rapide puis vibrato (rotatif) en haut — vitesse ET profondeur montent ensemble |
 | DRY FX | LED éteinte : direct propre · rouge : → Attack · vert : → Attack + LP · ambre : → Attack + LP + Detune |
 | Q | 4 résonances (LED de plus en plus lumineuse) |
-| gros bouton blanc | 8 crans (dans le mouvement) = 8 presets, il bloque sur chaque preset, butées en 1 et 8 : glisser vers le haut / la droite ou molette = choisir · clic = charger · maintenir 3 s = sauvegarder |
+| gros bouton blanc | sélecteur à 8 positions : il saute d'un preset à l'autre sans position intermédiaire (18 px de souris par cran), butées en 1 et 8 · glisser vers le haut / la droite ou molette = choisir · clic = charger · maintenir 3 s = sauvegarder |
 | footswitch PRESET | charge le preset choisi ; déjà chargé → suivant ; modifié → le recharge |
 | LED PRESET | fixe = chargé · clignote = modifié |
 | footswitch BYPASS | effet / bypass |

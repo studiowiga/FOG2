@@ -208,7 +208,7 @@ public:
                 }
                 else env[i] = 1.0f;
 
-                const float A = gate[i] * env[i] * a * 2.25f * owned[i];   // complex band = half the real amplitude
+                const float A = gate[i] * (env[i] * env[i]) * a * 2.25f * owned[i];   // swell curve: slow start, strong finish
                 if (A <= 0.0f) continue;
                 sM2 += A * vD2[i];
                 sM1 += A * vD1[i];
