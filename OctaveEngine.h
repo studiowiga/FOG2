@@ -58,7 +58,7 @@ public:
         stages = bankConfig().stages;
         rs (upr, 1.0f); rs (upi); rs (wr, 1.0f); rs (wi); rs (qr, 1.0f); rs (qi);
         rs (amp); rs (slow); rs (gate); rs (env, 1.0f); rs (retrig);
-        rs (vU1); rs (vU2); rs (vD1); rs (vD2); rs (wUp1); rs (wUp2); rs (onsetHold);
+        rs (vU1); rs (vU2); rs (vD1); rs (vD2); rs (wUp1); rs (wUp2); rs (onsetHold); rs (nfl, 1.0e-6f);
 
         for (int k = 0; k < N; ++k)
         {
@@ -78,6 +78,8 @@ public:
         gateDown = 1.0f - std::exp (-1.0f / (0.006f * fs));
         slowCoef = 1.0f - std::exp (-1.0f / (0.060f * fs));
         duckStep = 1.0f / (0.003f * fs);
+        nfFall   = 1.0f - std::exp (-1.0f / (0.030f * fs));
+        nfRise   = std::pow (10.0f, 4.0f / 20.0f / fs);      // the noise floor estimate climbs 4 dB/s at most
         reset();
     }
 
@@ -88,7 +90,7 @@ public:
             const size_t i = (size_t) k;
             y1r[i] = y1i[i] = y2r[i] = y2i[i] = y3r[i] = y3i[i] = 0.0f;
             upr[i] = 1.0f; upi[i] = 0.0f; wr[i] = 1.0f; wi[i] = 0.0f; qr[i] = 1.0f; qi[i] = 0.0f;
-            amp[i] = slow[i] = gate[i] = 0.0f; env[i] = 1.0f; retrig[i] = 0.0f; onsetHold[i] = 0.0f;
+            amp[i] = slow[i] = gate[i] = 0.0f; env[i] = 1.0f; retrig[i] = 0.0f; onsetHold[i] = 0.0f; nfl[i] = 1.0e-6f;
         }
     }
 
@@ -98,7 +100,7 @@ public:
     {
         const bool  useAttack = attackSeconds > 0.0005f;
         const float attStep   = useAttack ? 1.0f / (attackSeconds * fs) : 1.0f;
-        const float floorAmp  = 2.0e-5f;     // ~ -94 dBFS band level: below = silence
+        const float floorAmp  = 1.0e-4f;     // ~ -80 dBFS band level: below = silence
         const int   holdLen   = (int) (0.08f * fs);
 
         for (int n = 0; n < numSamples; ++n)
@@ -166,13 +168,16 @@ public:
                 const float a  = amp[i];
                 const float al = k > 0     ? amp[i - 1] : 0.0f;
                 const float ar = k < N - 1 ? amp[i + 1] : 0.0f;
-                const bool peak = a > al && a >= ar && a > floorAmp;
+                // per-band noise floor (hiss, hum, amp buzz): follows dips fast, rises slowly
+                if (a < nfl[i]) nfl[i] += (a - nfl[i]) * nfFall; else nfl[i] *= nfRise;
+                // a band may only speak if it is clearly above its own noise (no random 'beeps' in hiss)
+                const bool peak = a > al && a >= ar && a > floorAmp && a > (gate[i] > 0.5f ? 2.0f : 4.0f) * nfl[i];   // hysteresis: no chatter
 
                 gate[i] += ((peak ? 1.0f : 0.0f) - gate[i]) * (peak ? gateUp : gateDown);
 
                 // silent bands silently line their sub-octave phasors up with the louder
                 // neighbour, so a note that glides from one band to the next stays coherent
-                if (gate[i] < 0.02f)
+                if (gate[i] < 0.001f)
                 {
                     const size_t j = (al > ar) ? (k > 0 ? i - 1 : i) : (k < N - 1 ? i + 1 : i);
                     if (j != i)
@@ -208,7 +213,7 @@ public:
                 }
                 else env[i] = 1.0f;
 
-                const float A = gate[i] * (env[i] * env[i]) * a * 2.25f * owned[i];   // swell curve: slow start, strong finish
+                const float A = gate[i] * (env[i] * std::sqrt (env[i])) * a * 2.25f * owned[i];   // swell curve env^1.5: slow start, firm finish
                 if (A <= 0.0f) continue;
                 sM2 += A * vD2[i];
                 sM1 += A * vD1[i];
@@ -235,7 +240,8 @@ private:
     std::vector<float> centres, owned;
     std::vector<float> pr, pi, cg, y1r, y1i, y2r, y2i, y3r, y3i, upr, upi, wr, wi, qr, qi;
     int stages = 2;
-    std::vector<float> amp, slow, gate, env, retrig, vU1, vU2, vD1, vD2, wUp1, wUp2, onsetHold;
+    std::vector<float> amp, slow, gate, env, retrig, vU1, vU2, vD1, vD2, wUp1, wUp2, onsetHold, nfl;
+    float nfFall = 0.001f, nfRise = 1.0f;
     float gateUp = 0.01f, gateDown = 0.01f, slowCoef = 0.001f, duckStep = 0.01f;
 };
 

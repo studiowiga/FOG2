@@ -249,8 +249,8 @@ public:
         acc += d;
         const int sel = proc.getSelected();
         // a detent holds the knob until the mouse has really pushed past it
-        if (acc >= kStep && sel < 7)       { proc.selectPreset (sel + 1); acc = 0.0f; clickTime = juce::Time::getMillisecondCounter(); }
-        else if (acc <= -kStep && sel > 0) { proc.selectPreset (sel - 1); acc = 0.0f; clickTime = juce::Time::getMillisecondCounter(); }
+        if (acc >= kStep && sel < 7)       { proc.loadPreset (sel + 1); acc = 0.0f; clickTime = juce::Time::getMillisecondCounter(); }
+        else if (acc <= -kStep && sel > 0) { proc.loadPreset (sel - 1); acc = 0.0f; clickTime = juce::Time::getMillisecondCounter(); }
         // at the end stops it just doesn't move
         if ((sel == 7 && acc > 0) || (sel == 0 && acc < 0)) acc = juce::jlimit (-kStep * 0.3f, kStep * 0.3f, acc);
     }
@@ -268,7 +268,7 @@ public:
         {
             const int dir = wheelAcc > 0 ? 1 : -1; wheelAcc = 0;
             const int sel = juce::jlimit (0, 7, proc.getSelected() + dir);
-            if (sel != proc.getSelected()) { proc.selectPreset (sel); clickTime = now; }
+            if (sel != proc.getSelected()) { proc.loadPreset (sel); clickTime = now; }
         }
     }
 private:
@@ -414,12 +414,6 @@ public:
             const float y = faderY0 + (float) f->getPositionOfValue (v);
             at = { slotX[activeFader], y - 40.0f };
         }
-        else if (knob->isActive() || now < knobBubbleUntil)
-        {
-            text = "PRESET " + juce::String (proc.getSelected() + 1)
-                 + (knob->isHoldBlinking() ? "  - SAVING..." : (proc.getLoaded() == proc.getSelected() ? "  (LOADED)" : "  - CLICK TO LOAD"));
-            at = { 1000.0f, 575.0f };
-        }
         else if (now < flashUntil) { text = flashText; at = { 675.0f, 545.0f }; }
         if (text.isEmpty()) { lastBubble = {}; return; }
 
@@ -522,7 +516,7 @@ private:
         // hover tracking for the value bubble
         int hv = -1;
         for (auto* f : faders) if (f->isMouseOverOrDragging()) hv = f->index;
-        const bool bubbleWanted = hv >= 0 || dragging || knob->isActive() || now < bubbleUntil || now < knobBubbleUntil || now < flashUntil;
+        const bool bubbleWanted = hv >= 0 || dragging || now < bubbleUntil || now < flashUntil;
         if (hv != hoverFader) { hoverFader = hv; if (hv >= 0) activeFader = hv; }
         if (bubbleWanted || hadBubble)
         {

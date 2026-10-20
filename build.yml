@@ -16,7 +16,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: FogZ-VST3-Windows
-          path: build/FogZ_artefacts/Release/VST3/
+          # wildcard: works whatever the CMake target is called
+          path: build/*_artefacts/Release/VST3/
 
   macos:
     runs-on: macos-14
@@ -26,22 +27,28 @@ jobs:
         run: cmake -B build -G Xcode
       - name: Build (universal arm64 + x86_64)
         run: cmake --build build --config Release --parallel -- -quiet
-      - name: Ad-hoc sign + README
+      - name: Find, sign and package the plug-in
+        shell: bash
         run: |
-          cd build/FogZ_artefacts/Release/VST3
-          codesign --force --deep --sign - "Fog Z.vst3"
-          lipo -info "Fog Z.vst3/Contents/MacOS/Fog Z"
-          cat > "INSTALL macOS.txt" <<'TXT'
-          1. Copy Fog Z.vst3 to  ~/Library/Audio/Plug-Ins/VST3/   (or /Library/Audio/Plug-Ins/VST3/)
+          set -e
+          VST="$(find build -type d -name '*.vst3' -path '*Release/VST3/*' | head -n 1)"
+          if [ -z "$VST" ]; then echo "No .vst3 found"; find build -name '*.vst3'; exit 1; fi
+          echo "Found: $VST"
+          mkdir -p dist
+          cp -R "$VST" dist/
+          NAME="$(basename "$VST")"
+          codesign --force --deep --sign - "dist/$NAME"
+          lipo -info "dist/$NAME/Contents/MacOS/"* || true
+          cat > "dist/INSTALL macOS.txt" <<TXT
+          1. Copy "$NAME" to  ~/Library/Audio/Plug-Ins/VST3/   (or /Library/Audio/Plug-Ins/VST3/)
           2. Open Terminal and run once:
-                xattr -cr ~/Library/Audio/Plug-Ins/VST3/"Fog Z.vst3"
+                xattr -cr ~/Library/Audio/Plug-Ins/VST3/"$NAME"
              (removes the "downloaded from the internet" quarantine flag)
           3. Re-scan plug-ins in Reaper (Options > Preferences > Plug-ins > VST > Re-scan).
           TXT
+          ls -la dist
       - name: Upload VST3
         uses: actions/upload-artifact@v4
         with:
           name: FogZ-VST3-macOS
-          path: |
-            build/FogZ_artefacts/Release/VST3/Fog Z.vst3
-            build/FogZ_artefacts/Release/VST3/INSTALL macOS.txt
+          path: dist/

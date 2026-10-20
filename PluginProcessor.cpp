@@ -11,6 +11,7 @@ const std::vector<FactoryPreset>& getFactoryPresets()
     //                                  dry   -2    -1    +1    +2   attack  LP  detune | dryFx Q
     static const std::vector<FactoryPreset> list {
         { "Organ Pad",             mk ({ 0.60f, 0.26f, 0.70f, 0.62f, 0.30f, 0.45f, 0.62f, 0.35f }, 3, 0) },
+        { "Baritone Growl",        mk ({ 0.35f, 0.30f, 0.85f, 0.00f, 0.00f, 0.00f, 0.55f, 0.00f }, 0, 2) },
         { "Theremin-ish",          mk ({ 0.00f, 0.00f, 0.00f, 0.92f, 0.00f, 0.56f, 0.50f, 0.88f }, 0, 1) },
         { "Cello",                 mk ({ 0.00f, 0.00f, 0.86f, 0.10f, 0.00f, 0.50f, 0.40f, 0.12f }, 1, 1) },
         { "Lower + Upper Clean",   mk ({ 0.80f, 0.00f, 0.62f, 0.58f, 0.00f, 0.00f, 1.00f, 0.00f }, 0, 0) },
@@ -19,7 +20,6 @@ const std::vector<FactoryPreset>& getFactoryPresets()
         { "Sub Synth Bass",        mk ({ 0.20f, 0.66f, 0.85f, 0.00f, 0.00f, 0.08f, 0.30f, 0.00f }, 2, 3) },
         { "12-String Shimmer",     mk ({ 0.80f, 0.00f, 0.00f, 0.62f, 0.00f, 0.00f, 1.00f, 0.22f }, 0, 0) },
         { "Reverse Swell",         mk ({ 0.62f, 0.00f, 0.92f, 0.84f, 0.30f, 0.80f, 0.78f, 0.18f }, 1, 0) },
-        { "Baritone Growl",        mk ({ 0.35f, 0.30f, 0.85f, 0.00f, 0.00f, 0.00f, 0.55f, 0.00f }, 0, 2) },
         { "Leslie Rotary",         mk ({ 0.62f, 0.00f, 0.66f, 0.66f, 0.48f, 0.00f, 0.70f, 0.85f }, 3, 0) },
         { "Fog Horn",              mk ({ 0.00f, 0.80f, 0.55f, 0.25f, 0.00f, 0.30f, 0.25f, 0.15f }, 2, 3) },
     };
@@ -112,7 +112,7 @@ void FogProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     for (int i = 0; i < 8; ++i) { sm[(size_t) i].reset (sampleRate, 0.03); sm[(size_t) i].setCurrentAndTargetValue (raw[(size_t) i]->load()); }
     bypassMix.reset (sampleRate, 0.015);
     bypassMix.setCurrentAndTargetValue (bypassParam->get() ? 1.0f : 0.0f);
-    dryEnv = 1.0f; fastEnv = slowEnv = 0.0f; dryHold = 0; dryRetrig = false; rmsEnv = peakHold = 0.0f; susGain = 1.0f;
+    dryEnv = 1.0f; fastEnv = slowEnv = 0.0f; dryHold = 0; dryRetrig = false; rmsEnv = peakHold = 0.0f; susGain = 1.0f; stopFast = stopSlow = 0.0f; stopGain = 1.0f;
 }
 
 void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -184,10 +184,15 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
     const int   hold  = (int) (0.08 * sr);
     const float hpCoef = 1.0f - std::exp (-2.0f * 3.14159265f * 16.0f / (float) sr);
     const float rmsC = 1.0f - std::exp (-1.0f / (0.040f * (float) sr));
+    const float stopFastC   = 1.0f - std::exp (-1.0f / (0.006f * (float) sr));
+    const float stopSlowUpC = 1.0f - std::exp (-1.0f / (0.004f * (float) sr));
+    const float stopSlowDnC = 1.0f - std::exp (-1.0f / (0.150f * (float) sr));
+    const float stopDnC     = 1.0f - std::exp (-1.0f / (0.003f * (float) sr));
+    const float stopUpC     = 1.0f - std::exp (-1.0f / (0.010f * (float) sr));
     const float susC = 1.0f - std::exp (-1.0f / (0.030f * (float) sr));
     const float holdDecay = std::pow (10.0f, -4.0f / 20.0f / (float) sr);        // the held level fades 4 dB/s
     const float attNorm = juce::jlimit (0.0f, 1.0f, (raw[5]->load() - 0.02f) / 0.98f);
-    const float susMax = 1.0f + 2.8f * attNorm;                                    // up to about +11 dB
+    const float susMax = 1.0f + 2.0f * attNorm;                                    // up to about +9.5 dB
 
     float* outL = buffer.getWritePointer (0);
     float* outR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
@@ -235,13 +240,23 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
         }
         else susGain = 1.0f;
 
+        // ---- stop follower: when the guitar stops (palm mute, staccato, string damping) the narrow
+        //      band filters would keep ringing ~80 ms as pure tones ("beeps"); duck the octaves
+        //      as fast as the input drops ----
+        stopFast += (ax * ax - stopFast) * stopFastC;
+        stopSlow += (ax * ax - stopSlow) * (ax * ax > stopSlow ? stopSlowUpC : stopSlowDnC);
+        const float ratio = std::sqrt (stopFast / (stopSlow + 1.0e-12f));
+        const float stopTarget = juce::jlimit (0.0f, 1.0f, (ratio - 0.18f) / 0.42f);        // full at -4.4 dB, shut at -15 dB
+        stopGain += (stopTarget - stopGain) * (stopTarget < stopGain ? stopDnC : stopUpC);
+        sus *= stopGain;
+
         float low = (gM2 * voices[0][i] + gM1 * voices[1][i]) * sus;
         hpState += (low - hpState) * hpCoef; low -= hpState;          // 16 Hz rumble filter on the sub octaves
         const float up  = (gP1 * voices[2][i] + gP2 * voices[3][i]) * sus;
         float upL, upR; detUp.process (up, det, upL, upR);
 
         float dL = inL[i] * gDry, dR = inR[i] * gDry;
-        if (dryFx >= 1) { const float sw = dryEnv * dryEnv * sus; dL *= sw; dR *= sw; }   // same swell curve as the octaves
+        if (dryFx >= 1) { const float sw = dryEnv * std::sqrt (dryEnv) * sus; dL *= sw; dR *= sw; }   // same swell curve as the octaves
         if (dryFx == 3) { float t; detDryL.process (dL, det, dL, t); detDryR.process (dR, det, t, dR); }
 
         const bool dryThroughLp = dryFx >= 2;
