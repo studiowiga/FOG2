@@ -8,19 +8,20 @@ static FogPreset mk (std::array<float, 8> v, int dryFx, int q) { FogPreset p; p.
 
 const std::vector<FactoryPreset>& getFactoryPresets()
 {
+    //                                  dry   -2    -1    +1    +2   attack  LP  detune | dryFx Q
     static const std::vector<FactoryPreset> list {
-        { "12-String",            mk ({ 0.80f, 0.00f, 0.00f, 0.62f, 0.00f, 0.00f, 1.00f, 0.22f }, 0, 0) },
-        { "Organ",                mk ({ 0.70f, 0.00f, 0.72f, 0.62f, 0.42f, 0.00f, 0.74f, 0.30f }, 2, 0) },
-        { "Bass Sub",             mk ({ 0.62f, 0.48f, 0.82f, 0.00f, 0.00f, 0.00f, 0.52f, 0.00f }, 0, 1) },
-        { "Cello Swell",          mk ({ 0.00f, 0.00f, 0.86f, 0.00f, 0.00f, 0.56f, 0.46f, 0.10f }, 1, 1) },
-        { "String Pad",           mk ({ 0.62f, 0.42f, 0.76f, 0.64f, 0.42f, 0.55f, 0.66f, 0.45f }, 3, 2) },
-        { "Glass Bells",          mk ({ 0.60f, 0.00f, 0.00f, 0.40f, 0.82f, 0.00f, 0.95f, 0.14f }, 0, 0) },
-        { "Leslie",               mk ({ 0.62f, 0.00f, 0.66f, 0.66f, 0.48f, 0.00f, 0.70f, 0.82f }, 3, 0) },
-        { "Reso Sub Synth",       mk ({ 0.00f, 0.60f, 0.80f, 0.40f, 0.00f, 0.18f, 0.36f, 0.00f }, 2, 3) },
-        { "Octave Fuzz Bed",      mk ({ 0.75f, 0.00f, 0.70f, 0.70f, 0.00f, 0.00f, 0.88f, 0.00f }, 0, 0) },
-        { "Reverse Swell",        mk ({ 0.55f, 0.00f, 0.66f, 0.55f, 0.00f, 0.80f, 0.66f, 0.20f }, 1, 0) },
-        { "Baritone",             mk ({ 0.35f, 0.00f, 0.86f, 0.00f, 0.00f, 0.00f, 0.66f, 0.00f }, 0, 0) },
-        { "Sitar-ish Wah",        mk ({ 0.60f, 0.00f, 0.00f, 0.55f, 0.45f, 0.00f, 0.58f, 0.18f }, 2, 3) },
+        { "Organ Pad",             mk ({ 0.60f, 0.26f, 0.70f, 0.62f, 0.30f, 0.45f, 0.62f, 0.35f }, 3, 0) },
+        { "Theremin-ish",          mk ({ 0.00f, 0.00f, 0.00f, 0.86f, 0.22f, 0.36f, 0.44f, 0.58f }, 0, 2) },
+        { "Cello",                 mk ({ 0.00f, 0.00f, 0.86f, 0.10f, 0.00f, 0.50f, 0.40f, 0.12f }, 1, 1) },
+        { "Lower + Upper Clean",   mk ({ 0.80f, 0.00f, 0.62f, 0.58f, 0.00f, 0.00f, 1.00f, 0.00f }, 0, 0) },
+        { "Organ Drawbars",        mk ({ 0.70f, 0.56f, 0.70f, 0.66f, 0.52f, 0.00f, 0.80f, 0.28f }, 2, 0) },
+        { "Glass Choir",           mk ({ 0.56f, 0.00f, 0.40f, 0.68f, 0.82f, 0.60f, 0.74f, 0.40f }, 1, 1) },
+        { "Sub Synth Bass",        mk ({ 0.20f, 0.66f, 0.85f, 0.00f, 0.00f, 0.08f, 0.30f, 0.00f }, 2, 3) },
+        { "12-String Shimmer",     mk ({ 0.80f, 0.00f, 0.00f, 0.62f, 0.00f, 0.00f, 1.00f, 0.22f }, 0, 0) },
+        { "Reverse Swell",         mk ({ 0.50f, 0.00f, 0.66f, 0.55f, 0.00f, 0.82f, 0.66f, 0.20f }, 1, 0) },
+        { "Baritone Growl",        mk ({ 0.35f, 0.30f, 0.85f, 0.00f, 0.00f, 0.00f, 0.55f, 0.00f }, 0, 2) },
+        { "Leslie Rotary",         mk ({ 0.62f, 0.00f, 0.66f, 0.66f, 0.48f, 0.00f, 0.70f, 0.85f }, 3, 0) },
+        { "Fog Horn",              mk ({ 0.00f, 0.80f, 0.55f, 0.25f, 0.00f, 0.30f, 0.25f, 0.15f }, 2, 3) },
     };
     return list;
 }
@@ -30,6 +31,14 @@ static float levelGain (float s)      { return s * s * 1.5625f; }          // un
 static float attackSeconds (float s)  { return s < 0.02f ? 0.0f : 0.010f * std::pow (300.0f, (s - 0.02f) / 0.98f); }
 static float cutoffHz (float s)       { return 50.0f * std::pow (360.0f, s); }
 static const float qValues[4] = { 0.707f, 1.5f, 3.2f, 7.5f };
+// transparent below -1 dBFS, then a smooth knee: all voices flat out never hard-clip
+static inline float softLimit (float x)
+{
+    const float a = std::abs (x), t = 0.89f;
+    if (a <= t) return x;
+    const float y = t + (1.0f - t) * std::tanh ((a - t) / (1.0f - t));
+    return x < 0 ? -y : y;
+}
 
 FogProcessor::FogProcessor()
     : AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
@@ -41,13 +50,30 @@ FogProcessor::FogProcessor()
     rawQ     = apvts.getRawParameterValue (FogIDs::q);
     bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter (FogIDs::bypass));
     restoreFactorySlots();
+    loaded = 0;
+}
+
+// host preset menu (the drop-down of the plug-in window) = the 12 factory sounds
+int FogProcessor::getNumPrograms() { return (int) getFactoryPresets().size(); }
+const juce::String FogProcessor::getProgramName (int i)
+{
+    const auto& l = getFactoryPresets();
+    return juce::isPositiveAndBelow (i, (int) l.size()) ? juce::String (i + 1) + ". " + l[(size_t) i].name : juce::String();
+}
+void FogProcessor::setCurrentProgram (int i)
+{
+    if (! juce::isPositiveAndBelow (i, getNumPrograms()) || i == currentProgram.load()) return;
+    currentProgram = i;
+    if (juce::MessageManager::getInstance()->isThisTheMessageThread()) applyFactory (i);
+    else { pendingFactory = i; triggerAsyncUpdate(); }
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout FogProcessor::createLayout()
 {
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout l;
-    const float defs[8] = { 0.8f, 0.0f, 0.6f, 0.5f, 0.0f, 0.0f, 1.0f, 0.0f };
+    const auto& f0 = getFactoryPresets()[0].p;      // a fresh pedal = preset 1
+    float defs[8]; for (int i = 0; i < 8; ++i) defs[i] = f0.v[(size_t) i];
     const char* names[8] = { "Dry Output", "-2 Octaves", "-1 Octave", "+1 Octave", "+2 Octaves", "Attack", "LP Filter", "Detune" };
     for (int i = 0; i < 8; ++i)
     {
@@ -60,9 +86,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout FogProcessor::createLayout()
                                                       AudioParameterFloatAttributes().withStringFromValueFunction (txt)));
     }
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { FogIDs::dryFx, 1 }, "Dry FX",
-                                                   StringArray { "Dry clean", "Dry > Attack", "Dry > Attack + LP", "Dry > Attack + LP + Detune" }, 0));
+                                                   StringArray { "Dry clean", "Dry > Attack", "Dry > Attack + LP", "Dry > Attack + LP + Detune" }, getFactoryPresets()[0].p.dryFx));
     l.add (std::make_unique<AudioParameterChoice> (ParameterID { FogIDs::q, 1 }, "Filter Q",
-                                                   StringArray { "Q 1 (flat)", "Q 2", "Q 3", "Q 4 (peak)" }, 0));
+                                                   StringArray { "Q 1 (flat)", "Q 2", "Q 3", "Q 4 (peak)" }, getFactoryPresets()[0].p.q));
     l.add (std::make_unique<AudioParameterBool> (ParameterID { FogIDs::bypass, 1 }, "Bypass", false));
     return l;
 }
@@ -156,6 +182,7 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
     const float duck  = 1.0f / (0.003f * (float) sr);
     const float rise  = attSec > 0 ? 1.0f / (attSec * (float) sr) : 1.0f;
     const int   hold  = (int) (0.08 * sr);
+    const float hpCoef = 1.0f - std::exp (-2.0f * 3.14159265f * 16.0f / (float) sr);
 
     float* outL = buffer.getWritePointer (0);
     float* outR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
@@ -188,7 +215,8 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
         }
         else { dryEnv = 1.0f; dryRetrig = false; }
 
-        const float low = gM2 * voices[0][i] + gM1 * voices[1][i];
+        float low = gM2 * voices[0][i] + gM1 * voices[1][i];
+        hpState += (low - hpState) * hpCoef; low -= hpState;          // 16 Hz rumble filter on the sub octaves
         const float up  = gP1 * voices[2][i] + gP2 * voices[3][i];
         float upL, upR; detUp.process (up, det, upL, upR);
 
@@ -205,8 +233,8 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
 
         const float b = bypassMix.getNextValue();
         const float xl = inL[i], xr = inR[i];
-        outL[i] = yL + (xl - yL) * b;
-        if (outR != nullptr) outR[i] = yR + (xr - yR) * b;
+        outL[i] = softLimit (yL) + (xl - softLimit (yL)) * b;
+        if (outR != nullptr) outR[i] = softLimit (yR) + (xr - softLimit (yR)) * b;
     }
 }
 
@@ -301,6 +329,8 @@ bool FogProcessor::isModified() const
 
 void FogProcessor::handleAsyncUpdate()
 {
+    const int pf = pendingFactory.exchange (-1);
+    if (pf >= 0) applyFactory (pf);
     const int pg = pendingProgram.exchange (-1);
     if (pg >= 0) loadPreset (pg);
     for (int k = pendingPresetPress.exchange (0); k > 0; --k) presetFootswitch();
@@ -328,10 +358,11 @@ void FogProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.appendChild (ps, nullptr);
     state.setProperty ("selected", selected.load(), nullptr);
     state.setProperty ("loaded", loaded.load(), nullptr);
-    state.setProperty ("uiScale", uiScale.load(), nullptr);
+    state.setProperty ("uiScale2", uiScale.load(), nullptr);
     state.setProperty ("ccPreset", ccPreset.load(), nullptr);
     state.setProperty ("ccBypass", ccBypass.load(), nullptr);
     state.setProperty ("latching", latchingPedals.load(), nullptr);
+    state.setProperty ("program", currentProgram.load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
 }
 
@@ -359,10 +390,11 @@ void FogProcessor::setStateInformation (const void* data, int size)
     }
     selected   = juce::jlimit (0, 7, (int) state.getProperty ("selected", 0));
     loaded     = juce::jlimit (-1, 7, (int) state.getProperty ("loaded", -1));
-    uiScale    = juce::jlimit (0.67f, 1.25f, (float) state.getProperty ("uiScale", 0.67f));
+    uiScale    = juce::jlimit (0.67f, 1.25f, (float) state.getProperty ("uiScale2", 0.67f));
     ccPreset   = (int) state.getProperty ("ccPreset", 80);
     ccBypass   = (int) state.getProperty ("ccBypass", 81);
     latchingPedals = (bool) state.getProperty ("latching", false);
+    currentProgram = (int) state.getProperty ("program", 0);
     apvts.replaceState (state);
 }
 

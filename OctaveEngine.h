@@ -19,14 +19,21 @@
 #include <cmath>
 #include <algorithm>
 
+struct BankConfig
+{
+    float q = 30.0f, bmin = 12.0f, spacing = 0.6f;   // band = max(bmin, f/q) ; step = spacing * band
+    int   stages = 3;
+};
+inline BankConfig& bankConfig() { static BankConfig c; return c; }
+
 class OctaveBank
 {
 public:
-    static float bandwidth (float f) { return std::max (10.0f, f / 17.0f); }   // combined -3 dB bandwidth
+    static float bandwidth (float f) { return std::max (bankConfig().bmin, f / bankConfig().q); }   // combined -3 dB bandwidth
     static std::vector<float> allCentres()
     {
         std::vector<float> c; float f = 35.0f;
-        while (f < 6000.0f) { c.push_back (f); f += 0.5f * bandwidth (f); }    // 50 % overlap
+        while (f < 6000.0f) { c.push_back (f); f += bankConfig().spacing * bandwidth (f); }
         return c;
     }
     // owns the bands [fLo, fHi); 3 guard bands each side are computed only to judge peaks
@@ -47,7 +54,8 @@ public:
         N = (int) centres.size();
         auto rs = [this] (std::vector<float>& v, float val = 0.0f) { v.assign ((size_t) N + 2, val); };
         rs (pr); rs (pi); rs (cg);
-        rs (y1r); rs (y1i); rs (y2r); rs (y2i);
+        rs (y1r); rs (y1i); rs (y2r); rs (y2i); rs (y3r); rs (y3i);
+        stages = bankConfig().stages;
         rs (upr, 1.0f); rs (upi); rs (wr, 1.0f); rs (wi); rs (qr, 1.0f); rs (qi);
         rs (amp); rs (slow); rs (gate); rs (env, 1.0f); rs (retrig);
         rs (vU1); rs (vU2); rs (vD1); rs (vD2); rs (wUp1); rs (wUp2); rs (onsetHold);
@@ -55,7 +63,8 @@ public:
         for (int k = 0; k < N; ++k)
         {
             const float fc = centres[(size_t) k];
-            const float bw = bandwidth (fc) / 0.6436f;                  // one stage of the cascade
+            // -3 dB bandwidth of one stage so that the cascade has bandwidth(fc)
+            const float bw = bandwidth (fc) / std::sqrt (std::pow (2.0f, 1.0f / (float) stages) - 1.0f);
             const float r  = std::exp (-juce_pi_f * bw / fs);
             const float w  = 2.0f * juce_pi_f * fc / fs;
             pr[(size_t) k] = r * std::cos (w);
@@ -77,7 +86,7 @@ public:
         for (int k = 0; k < N + 2; ++k)
         {
             const size_t i = (size_t) k;
-            y1r[i] = y1i[i] = y2r[i] = y2i[i] = 0.0f;
+            y1r[i] = y1i[i] = y2r[i] = y2i[i] = y3r[i] = y3i[i] = 0.0f;
             upr[i] = 1.0f; upi[i] = 0.0f; wr[i] = 1.0f; wi[i] = 0.0f; qr[i] = 1.0f; qi[i] = 0.0f;
             amp[i] = slow[i] = gate[i] = 0.0f; env[i] = 1.0f; retrig[i] = 0.0f; onsetHold[i] = 0.0f;
         }
@@ -107,9 +116,16 @@ public:
                 const float a2r = c * a1r + p_r * y2r[i] - p_i * y2i[i];
                 const float a2i = c * a1i + p_r * y2i[i] + p_i * y2r[i];
                 y2r[i] = a2r; y2i[i] = a2i;
+                float zr = a2r, zi = a2i;
+                if (stages > 2)
+                {
+                    zr = c * a2r + p_r * y3r[i] - p_i * y3i[i];
+                    zi = c * a2i + p_r * y3i[i] + p_i * y3r[i];
+                    y3r[i] = zr; y3i[i] = zi;
+                }
 
-                const float mag = std::sqrt (a2r * a2r + a2i * a2i) + 1.0e-20f;
-                const float ur = a2r / mag, ui = a2i / mag;
+                const float mag = std::sqrt (zr * zr + zi * zi) + 1.0e-20f;
+                const float ur = zr / mag, ui = zi / mag;
                 amp[i] = mag;
 
                 // rotation since last sample  d = u . conj(u_prev)
@@ -217,7 +233,8 @@ private:
     float fs = 48000.0f;
     int N = 0;
     std::vector<float> centres, owned;
-    std::vector<float> pr, pi, cg, y1r, y1i, y2r, y2i, upr, upi, wr, wi, qr, qi;
+    std::vector<float> pr, pi, cg, y1r, y1i, y2r, y2i, y3r, y3i, upr, upi, wr, wi, qr, qi;
+    int stages = 2;
     std::vector<float> amp, slow, gate, env, retrig, vU1, vU2, vD1, vD2, wUp1, wUp2, onsetHold;
     float gateUp = 0.01f, gateDown = 0.01f, slowCoef = 0.001f, duckStep = 0.01f;
 };

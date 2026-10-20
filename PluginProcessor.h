@@ -38,16 +38,16 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "Fog2"; }
+    const juce::String getName() const override { return "Fog Z"; }
     bool acceptsMidi() const override  { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.2; }
 
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
+    int getNumPrograms() override;
+    int getCurrentProgram() override { return currentProgram.load(); }
+    void setCurrentProgram (int) override;
+    const juce::String getProgramName (int) override;
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock&) override;
@@ -87,7 +87,7 @@ private:
     std::array<FogPreset, 8> slots;
     std::atomic<int> selected { 0 }, loaded { -1 };
     std::atomic<juce::uint32> saveBlinkStart { 0 };
-    std::atomic<int> pendingPresetPress { 0 }, pendingBypass { 0 }, pendingProgram { -1 };
+    std::atomic<int> pendingPresetPress { 0 }, pendingBypass { 0 }, pendingProgram { -1 }, pendingFactory { -1 }, currentProgram { 0 };
     int lastCcVal[128] {};
 
     std::array<std::atomic<float>*, 8> raw {};
@@ -104,6 +104,7 @@ private:
     float dryEnv = 1.0f, fastEnv = 0, slowEnv = 0, dryHold = 0; bool dryRetrig = false;
     double sr = 48000.0;
     int preparedBlock = 512;
+    float hpState = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FogProcessor)
 };

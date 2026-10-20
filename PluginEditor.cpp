@@ -6,25 +6,29 @@
 // =============================================================================
 namespace
 {
-    constexpr int   kW = 1240, kH = 928;
-    constexpr float kDefaultScale = 0.67f;          // same window as Ring Think, and the minimum size
+    constexpr int   kW = 1240, kH = 928;              // background.png
+    // Window sizes follow Ring Think: percentages of a 993 x 743 pedal, 67 % = default = minimum
+    constexpr float kBaseW = 993.0f, kBaseH = 743.0f;
+    constexpr float kDefaultScale = 0.67f;
     constexpr float kMaxScale     = 1.25f;
-    const float     kMenuScales[3] = { 0.67f, 0.75f, 1.0f };
+    const float     kMenuScales[4] = { 0.67f, 0.75f, 1.0f, 1.25f };
 
-    const float slotX[8]  = { 181.5f, 278.4f, 375.4f, 473.4f, 570.4f, 765.3f, 861.3f, 958.2f };
-    constexpr float slotTop = 163.8f, slotBot = 468.1f, travelTop = 191.7f, travelBot = 439.3f;
-    constexpr float faderW = 46.0f, faderY0 = 150.0f, faderY1 = 482.0f;
+    const float slotX[8]  = { 175.9f, 275.6f, 375.4f, 474.4f, 574.9f, 772.3f, 869.3f, 968.4f };
+    constexpr float travelTop = 193.0f, travelBot = 448.0f;
+    constexpr float faderW = 46.0f, faderY0 = 150.0f, faderY1 = 492.0f;
+    constexpr float capW = 30.3f, capH = 60.7f;
 
-    const juce::Point<float> dryLed   { 669.4f, 159.7f },  dryBtn { 669.4f, 249.4f };
-    const juce::Point<float> qLed     { 669.4f, 349.5f },  qBtn   { 669.4f, 442.4f };
-    constexpr float btnR = 34.0f;
-    const juce::Point<float> knobC    { 1085.1f, 148.4f };
-    constexpr float knobR = 62.5f;
-    constexpr float presetLedX = 1078.9f, presetLedY0 = 241.2f, presetLedDY = 38.31f;
-    const juce::Point<float> redPreset { 468.2f, 751.8f }, redBypass { 772.6f, 753.9f };
-    const juce::Point<float> fsPreset  { 270.2f, 782.8f }, fsBypass  { 976.8f, 777.6f };
+    const juce::Point<float> dryLed   { 675.6f, 153.3f },  dryBtn { 675.2f, 250.7f };
+    const juce::Point<float> qLed     { 675.6f, 353.8f },  qBtn   { 675.2f, 452.5f };
+    constexpr float btnImg = 67.4f, btnR = 32.0f;
+    const juce::Point<float> knobC    { 1094.8f, 144.9f };
+    constexpr float knobR = 66.0f;
+    constexpr float presetLedX = 1091.3f, presetLedY0 = 245.1f, presetLedDY = 38.94f;
+    const juce::Point<float> redPreset { 469.2f, 765.2f }, redBypass { 780.3f, 764.9f };
+    const juce::Point<float> fsPreset  { 270.9f, 775.7f }, fsBypass  { 982.6f, 782.4f };
+    constexpr float fsImg = 73.5f;
 
-    const juce::Colour cream   (0xfff4efe6);
+    const juce::Colour cream   (0xfff1e9dc);
     const juce::Colour bubbleBg(0xe0201010);
 
     juce::Image img (const void* d, int s) { return juce::ImageCache::getFromMemory (d, s); }
@@ -62,52 +66,13 @@ struct FaderLnF : public juce::LookAndFeel_V4
         return l;
     }
     void drawLinearSlider (juce::Graphics& g, int, int, int w, int, float pos, float, float,
-                           juce::Slider::SliderStyle, juce::Slider& s) override
+                           juce::Slider::SliderStyle, juce::Slider&) override
     {
-        using namespace juce;
-        const float cx = (float) w * 0.5f;
-        const float t = slotTop - faderY0, b = slotBot - faderY0;
-
-        // --- slot: light printed rim, black well, inner shadow ---
-        g.setColour (Colour (0xffe9d9cf).withAlpha (0.92f));
-        g.fillRoundedRectangle (cx - 11.6f, t, 23.2f, b - t, 11.6f);
-        g.setColour (Colour (0xff3a0606));
-        g.fillRoundedRectangle (cx - 9.8f, t + 1.8f, 19.6f, b - t - 3.6f, 9.8f);
-        ColourGradient well (Colour (0xff050303), cx - 8.0f, 0, Colour (0xff1c1414), cx + 8.0f, 0, false);
-        g.setGradientFill (well);
-        g.fillRoundedRectangle (cx - 8.4f, t + 3.0f, 16.8f, b - t - 6.0f, 8.4f);
-        g.setColour (Colours::white.withAlpha (0.06f));
-        g.drawLine (cx + 5.5f, t + 12.0f, cx + 5.5f, b - 12.0f, 1.2f);
-
-        // --- cap ---
-        const float cw = 31.0f, ch = 47.0f;
-        Rectangle<float> cap (cx - cw * 0.5f, pos - ch * 0.5f, cw, ch);
-        // stem shadow inside the slot under the cap
-        g.setColour (Colours::black.withAlpha (0.55f));
-        g.fillRoundedRectangle (cx - 8.0f, pos + ch * 0.5f - 6.0f, 16.0f, 12.0f, 6.0f);
-        // drop shadow (light comes from the top-left)
-        for (int i = 4; i >= 1; --i)
-        {
-            g.setColour (Colours::black.withAlpha (0.07f));
-            g.fillEllipse (cap.translated (2.2f, 4.0f).expanded ((float) i * 1.1f));
-        }
-        ColourGradient body (Colour (0xffffffff), cap.getX() + cw * 0.32f, cap.getY() + ch * 0.25f,
-                             Colour (0xffbdb6ac), cap.getRight() + 2.0f, cap.getBottom(), true);
-        body.addColour (0.55, Colour (0xfff0ece5));
-        g.setGradientFill (body);
-        g.fillEllipse (cap);
-        // lower lip: the cap is a little cylinder seen from above
-        g.setColour (Colour (0xff9d958a).withAlpha (0.55f));
-        g.drawEllipse (cap.reduced (0.6f), 1.1f);
-        Path lip; lip.addCentredArc (cx, pos + 1.0f, cw * 0.5f - 1.2f, ch * 0.5f - 1.2f, 0.0f,
-                                     MathConstants<float>::pi * 0.62f, MathConstants<float>::pi * 1.38f, true);
-        g.setColour (Colour (0xff7a7268).withAlpha (0.45f));
-        g.strokePath (lip, PathStrokeType (2.0f));
-        // specular highlight
-        g.setColour (Colours::white.withAlpha (0.85f));
-        g.fillEllipse (cap.getX() + cw * 0.22f, cap.getY() + ch * 0.12f, cw * 0.30f, ch * 0.20f);
-        ignoreUnused (s);
+        if (! cap.isValid()) cap = img (BinaryData::fader_cap_png, BinaryData::fader_cap_pngSize);
+        g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+        g.drawImage (cap, juce::Rectangle<float> (capW, capH).withCentre ({ (float) w * 0.5f, pos }));
     }
+    juce::Image cap;
 };
 
 class Fader : public juce::Slider
@@ -143,36 +108,15 @@ public:
     std::function<void()> onPress;
     void paint (juce::Graphics& g) override
     {
-        using namespace juce;
+        if (! face.isValid()) face = img (BinaryData::button_up_png, BinaryData::button_up_pngSize);
         auto c = getLocalBounds().toFloat().getCentre();
-        const float r = btnR;
-        // recess ring printed around the button
-        g.setColour (Colour (0xff2a0505).withAlpha (0.85f));
-        g.fillEllipse (c.x - r - 1.0f, c.y - r - 0.5f, (r + 1.0f) * 2, (r + 1.0f) * 2);
-        g.setColour (Colour (0xffdcb7ae).withAlpha (0.6f));
-        g.drawEllipse (c.x - r - 1.8f, c.y - r - 1.3f, (r + 1.8f) * 2, (r + 1.8f) * 2, 1.0f);
-
-        const float rr = pressed ? r - 2.6f : r - 1.6f;
-        const float dy = pressed ? 1.2f : 0.0f;
-        if (! pressed)
-            for (int i = 3; i >= 1; --i)
-            {
-                g.setColour (Colours::black.withAlpha (0.10f));
-                g.fillEllipse (c.x - rr + 1.5f, c.y - rr + 2.5f, rr * 2 + (float) i, rr * 2 + (float) i);
-            }
-        ColourGradient face (pressed ? Colour (0xffe9e5de) : Colour (0xffffffff), c.x - rr * 0.35f, c.y - rr * 0.45f + dy,
-                             pressed ? Colour (0xffb3aca2) : Colour (0xffcdc6bc), c.x + rr, c.y + rr + dy, true);
-        face.addColour (0.6, pressed ? Colour (0xffd6d1c9) : Colour (0xfff1ede7));
-        g.setGradientFill (face);
-        g.fillEllipse (c.x - rr, c.y - rr + dy, rr * 2, rr * 2);
-        g.setColour (Colour (0xff8d857b).withAlpha (0.6f));
-        g.drawEllipse (c.x - rr, c.y - rr + dy, rr * 2, rr * 2, 1.0f);
-        if (! pressed)
-        {
-            g.setColour (Colours::white.withAlpha (0.7f));
-            g.fillEllipse (c.x - rr * 0.62f, c.y - rr * 0.70f, rr * 0.55f, rr * 0.32f);
-        }
+        g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+        const float d = pressed ? btnImg * 0.93f : btnImg;
+        auto r = juce::Rectangle<float> (d, d).withCentre (c.translated (0.0f, pressed ? 1.2f : 0.0f));
+        g.drawImage (face, r);
+        if (pressed) { g.setColour (juce::Colours::black.withAlpha (0.16f)); g.fillEllipse (r.reduced (btnImg * 0.04f)); }
     }
+    juce::Image face;
     bool hitTest (int x, int y) override { return getLocalBounds().toFloat().getCentre().getDistanceFrom ({ (float) x, (float) y }) < btnR + 2; }
     void mouseDown (const juce::MouseEvent& e) override
     {
@@ -205,47 +149,51 @@ public:
         using namespace juce;
         auto c = getLocalBounds().toFloat().getCentre();
         const float r = knobR;
-        // soft cast shadow (light from top-left)
-        for (int i = 6; i >= 1; --i)
+        // cast shadow (light from the top-left, like the picture)
+        for (int i = 7; i >= 1; --i)
         {
-            g.setColour (Colours::black.withAlpha (0.055f));
-            g.fillEllipse (c.x - r + 4.0f - (float) i, c.y - r + 7.0f - (float) i, (r + (float) i) * 2, (r + (float) i) * 2);
+            g.setColour (Colours::black.withAlpha (0.05f));
+            g.fillEllipse (c.x - r + 5.0f - (float) i, c.y - r + 8.0f - (float) i, (r + (float) i) * 2, (r + (float) i) * 2);
         }
-        // skirt
-        ColourGradient skirt (Colour (0xfff7f4ee), c.x - r, c.y - r, Colour (0xffa9a196), c.x + r, c.y + r, false);
-        g.setGradientFill (skirt);
-        g.fillEllipse (c.x - r, c.y - r, r * 2, r * 2);
-        // knurled rim : grooves turn with the knob, their shading stays tied to the light
-        const int grooves = 48;
-        for (int k = 0; k < grooves; ++k)
+        // translucent outer collar
+        ColourGradient collar (Colour (0xfff2eee8), c.x - r, c.y - r, Colour (0xffa59d93), c.x + r, c.y + r, false);
+        g.setGradientFill (collar); g.fillEllipse (c.x - r, c.y - r, r * 2, r * 2);
+        // knurled ring (40 even teeth) : everything turns with the knob,
+        // the shading of each tooth stays tied to the light
+        const float r0 = r - 12.0f, r1 = r - 1.8f;
+        const int teeth = 40;
+        for (int k = 0; k < teeth; ++k)
         {
-            const float a = angle + MathConstants<float>::twoPi * (float) k / (float) grooves;
-            const float lit = 0.5f + 0.5f * std::cos (a - degreesToRadians (-45.0f) - MathConstants<float>::halfPi);
-            const float x0 = c.x + std::sin (a) * (r - 6.5f), y0 = c.y - std::cos (a) * (r - 6.5f);
-            const float x1 = c.x + std::sin (a) * (r - 0.8f), y1 = c.y - std::cos (a) * (r - 0.8f);
-            g.setColour (Colour (0xff6e665c).withAlpha (0.10f + 0.22f * (1.0f - lit)));
-            g.drawLine (x0, y0, x1, y1, 1.6f);
-            g.setColour (Colours::white.withAlpha (0.10f + 0.30f * lit));
-            g.drawLine (x0 + 1.1f * std::cos (a), y0 + 1.1f * std::sin (a), x1 + 1.1f * std::cos (a), y1 + 1.1f * std::sin (a), 0.8f);
+            const float a  = angle + MathConstants<float>::twoPi * (float) k / (float) teeth;
+            const float lit = 0.5f + 0.5f * std::cos (a + degreesToRadians (45.0f));
+            const bool detent = false;          // uniform knurling: the 8 detents are in the movement only
+            Path tooth;
+            const float hw = detent ? 0.040f : 0.055f;
+            tooth.startNewSubPath (c.x + std::sin (a - hw) * r0, c.y - std::cos (a - hw) * r0);
+            tooth.lineTo (c.x + std::sin (a - hw) * r1, c.y - std::cos (a - hw) * r1);
+            tooth.lineTo (c.x + std::sin (a + hw) * r1, c.y - std::cos (a + hw) * r1);
+            tooth.lineTo (c.x + std::sin (a + hw) * r0, c.y - std::cos (a + hw) * r0);
+            tooth.closeSubPath();
+            g.setColour (detent ? Colour (0xff4f4740).withAlpha (0.55f + 0.25f * (1.0f - lit))
+                                : Colour (0xfffbf8f3).withAlpha (0.25f + 0.55f * lit));
+            g.fillPath (tooth);
+            if (! detent) { g.setColour (Colour (0xff6f675d).withAlpha (0.18f + 0.25f * (1.0f - lit))); g.strokePath (tooth, PathStrokeType (0.6f)); }
         }
         // top face
-        const float tr = r - 8.0f;
-        ColourGradient top (Colour (0xffffffff), c.x - tr * 0.45f, c.y - tr * 0.55f, Colour (0xffd2cbc0), c.x + tr, c.y + tr, true);
-        top.addColour (0.55, Colour (0xfff3efe8));
-        g.setGradientFill (top);
-        g.fillEllipse (c.x - tr, c.y - tr, tr * 2, tr * 2);
-        g.setColour (Colour (0xff9a9186).withAlpha (0.55f));
-        g.drawEllipse (c.x - tr, c.y - tr, tr * 2, tr * 2, 1.0f);
-        // engraved pointer
+        const float tr = r0 - 1.0f;
+        ColourGradient top (Colour (0xffffffff), c.x - tr * 0.45f, c.y - tr * 0.55f, Colour (0xffcdc6bb), c.x + tr, c.y + tr, true);
+        top.addColour (0.55, Colour (0xfff2eee7));
+        g.setGradientFill (top); g.fillEllipse (c.x - tr, c.y - tr, tr * 2, tr * 2);
+        g.setColour (Colour (0xff8f877c).withAlpha (0.55f)); g.drawEllipse (c.x - tr, c.y - tr, tr * 2, tr * 2, 1.0f);
+        // engraved pointer groove
         const float sa = std::sin (angle), ca = -std::cos (angle);
-        const float p0 = 12.0f, p1 = tr - 7.0f;
-        g.setColour (Colour (0xff5c554c).withAlpha (0.75f));
-        g.drawLine (c.x + sa * p0, c.y + ca * p0, c.x + sa * p1, c.y + ca * p1, 3.2f);
-        g.setColour (Colours::white.withAlpha (0.9f));
-        g.drawLine (c.x + sa * p0 + 1.2f, c.y + ca * p0 + 1.2f, c.x + sa * p1 + 1.2f, c.y + ca * p1 + 1.2f, 1.0f);
-        // highlight
-        g.setColour (Colours::white.withAlpha (0.55f));
-        g.fillEllipse (c.x - tr * 0.62f, c.y - tr * 0.68f, tr * 0.62f, tr * 0.38f);
+        const float p0 = 8.0f, p1 = tr - 8.0f;
+        g.setColour (Colour (0xff5d564d).withAlpha (0.8f));
+        g.drawLine (c.x + sa * p0, c.y + ca * p0, c.x + sa * p1, c.y + ca * p1, 3.4f);
+        g.setColour (Colours::white.withAlpha (0.95f));
+        g.drawLine (c.x + sa * p0 + 1.3f, c.y + ca * p0 + 1.3f, c.x + sa * p1 + 1.3f, c.y + ca * p1 + 1.3f, 1.1f);
+        g.setColour (Colours::white.withAlpha (0.5f));
+        g.fillEllipse (c.x - tr * 0.62f, c.y - tr * 0.70f, tr * 0.62f, tr * 0.36f);
     }
     bool hitTest (int x, int y) override { return getLocalBounds().toFloat().getCentre().getDistanceFrom ({ (float) x, (float) y }) < knobR; }
     void mouseEnter (const juce::MouseEvent&) override { hover = true; }
@@ -291,10 +239,10 @@ private:
         if (down && ! dragged && ! saved && holdMs() >= 3000) { proc.savePreset (proc.getSelected()); saved = true; }
         // continuous angle between detents while dragging, eased otherwise
         float target = targetAngle (proc.getSelected());
-        if (down && dragged) target += juce::degreesToRadians (40.0f) * juce::jlimit (0.0f, 0.95f, dragFrac) * 0.6f;
+        if (down && dragged) target += juce::degreesToRadians (7.0f) * std::sin (juce::MathConstants<float>::pi * juce::jlimit (0.0f, 1.0f, dragFrac)) * (dragFrac < 0.5f ? 1.0f : -1.0f);
         // wrap from 8 to 1 the short way
         const float diff = target - angle;
-        if (std::abs (diff) > 0.0005f) { angle += diff * 0.28f; repaint(); }
+        if (std::abs (diff) > 0.0005f) { angle += diff * (down && dragged ? 0.55f : 0.35f); repaint(); }
     }
     FogProcessor& proc; PedalContent& owner;
     float angle = 0, dragFrac = 0, wheelAcc = 0;
@@ -310,17 +258,19 @@ class Footswitch : public juce::Component
 public:
     Footswitch (int w, PedalContent& o) : which (w), owner (o)
     {
-        up   = img (BinaryData::footswitch_up_png,   BinaryData::footswitch_up_pngSize);
-        down = img (BinaryData::footswitch_down_png, BinaryData::footswitch_down_pngSize);
+        up = w == 1 ? img (BinaryData::fs_preset_up_png, BinaryData::fs_preset_up_pngSize)
+                    : img (BinaryData::fs_bypass_up_png, BinaryData::fs_bypass_up_pngSize);
     }
     std::function<void()> onPress;
     std::function<void (juce::Component*)> onMenu;
     void paint (juce::Graphics& g) override
     {
         auto c = getLocalBounds().toFloat().getCentre();
-        const float d = pressed ? 66.5f : 69.0f;
         g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
-        g.drawImage (pressed ? down : up, juce::Rectangle<float> (d, d).withCentre (c.translated (0, pressed ? 1.0f : 0.0f)));
+        const float d = pressed ? fsImg * 0.95f : fsImg;
+        auto r = juce::Rectangle<float> (d, d).withCentre (c.translated (0.0f, pressed ? 1.2f : 0.0f));
+        g.drawImage (up, r);
+        if (pressed) { g.setColour (juce::Colours::black.withAlpha (0.18f)); g.fillEllipse (r.reduced (fsImg * 0.03f)); }
     }
     bool hitTest (int x, int y) override { return getLocalBounds().toFloat().getCentre().getDistanceFrom ({ (float) x, (float) y }) < 40.0f; }
     void mouseDown (const juce::MouseEvent& e) override
@@ -331,7 +281,7 @@ public:
     void mouseUp (const juce::MouseEvent&) override { pressed = false; repaint(); }
     const int which;
 private:
-    PedalContent& owner; juce::Image up, down; bool pressed = false;
+    PedalContent& owner; juce::Image up; bool pressed = false;
 };
 
 // =============================================================================
@@ -343,10 +293,6 @@ public:
     PedalContent (FogProcessor& p, FogEditor& e) : proc (p), editor (e)
     {
         bg       = img (BinaryData::background_png,   BinaryData::background_pngSize);
-        redOn    = img (BinaryData::led_red_on_png,   BinaryData::led_red_on_pngSize);
-        redOff   = img (BinaryData::led_red_off_png,  BinaryData::led_red_off_pngSize);
-        amberOn  = img (BinaryData::led_amber_on_png, BinaryData::led_amber_on_pngSize);
-        amberOff = img (BinaryData::led_amber_off_png,BinaryData::led_amber_off_pngSize);
         setSize (kW, kH);
         setOpaque (true);
 
@@ -376,11 +322,11 @@ public:
         qBtnC->onPress = [cycle] { cycle (FogIDs::q, "FILTER Q", { "1 (FLAT)", "2", "3", "4 (PEAK)" }); };
         for (auto [b, c] : { std::pair<PlasticButton*, juce::Point<float>> { dryBtnC.get(), dryBtn }, { qBtnC.get(), qBtn } })
         {
-            b->setBounds (juce::Rectangle<int> (84, 84).withCentre (c.toInt()));
+            b->setBounds (juce::Rectangle<int> (76, 76).withCentre (c.toInt()));
             addAndMakeVisible (b);
         }
         knob = std::make_unique<PresetKnob> (proc, *this);
-        knob->setBounds (juce::Rectangle<int> (150, 150).withCentre (knobC.toInt()));
+        knob->setBounds (juce::Rectangle<int> (160, 160).withCentre (knobC.toInt()));
         addAndMakeVisible (*knob);
 
         fsPre = std::make_unique<Footswitch> (1, *this);
@@ -425,9 +371,9 @@ public:
         {
             text = "PRESET " + juce::String (proc.getSelected() + 1)
                  + (knob->isHoldBlinking() ? "  - SAVING..." : (proc.getLoaded() == proc.getSelected() ? "  (LOADED)" : "  - CLICK TO LOAD"));
-            at = { 1010.0f, 566.0f };
+            at = { 1000.0f, 575.0f };
         }
-        else if (now < flashUntil) { text = flashText; at = { 669.4f, 520.0f }; }
+        else if (now < flashUntil) { text = flashText; at = { 675.0f, 545.0f }; }
         if (text.isEmpty()) { lastBubble = {}; return; }
 
         juce::Font f (juce::FontOptions (17.0f, juce::Font::bold));
@@ -456,49 +402,34 @@ public:
 
 private:
     // ---------------------------------------------------------------- LEDs
-    static void drawDomeLed (juce::Graphics& g, juce::Point<float> c, float r, juce::Colour lit, float level, juce::Colour offTint)
+    // lights a LED of the picture (unlit = the picture itself)
+    static void lightLed (juce::Graphics& g, juce::Point<float> c, float r, juce::Colour col, float level)
     {
         using namespace juce;
-        // chrome bezel
-        ColourGradient bez (Colour (0xfff3eee8), c.x - r - 3, c.y - r - 3, Colour (0xff6d6259), c.x + r + 3, c.y + r + 3, false);
-        g.setGradientFill (bez);
-        g.fillEllipse (c.x - r - 3.2f, c.y - r - 3.2f, (r + 3.2f) * 2, (r + 3.2f) * 2);
-        g.setColour (Colour (0xff3a0808)); g.fillEllipse (c.x - r - 0.8f, c.y - r - 0.8f, (r + 0.8f) * 2, (r + 0.8f) * 2);
-        // glow
-        if (level > 0.01f)
-            for (int i = 0; i < 6; ++i)
-            {
-                const float gr = r + 3.0f + (float) i * 4.0f;
-                g.setColour (lit.withAlpha (0.10f * level * (1.0f - (float) i / 6.0f)));
-                g.fillEllipse (c.x - gr, c.y - gr, gr * 2, gr * 2);
-            }
-        const Colour base = offTint.interpolatedWith (lit, level);
-        ColourGradient dome (base.brighter (0.6f + 0.6f * level), c.x - r * 0.25f, c.y - r * 0.3f,
-                             base.darker (0.8f - 0.5f * level), c.x + r, c.y + r, true);
-        g.setGradientFill (dome);
-        g.fillEllipse (c.x - r, c.y - r, r * 2, r * 2);
-        if (level > 0.01f)
+        if (level <= 0.01f) return;
+        for (int i = 0; i < 7; ++i)
         {
-            g.setColour (Colours::white.withAlpha (0.55f * level));
-            g.fillEllipse (c.x - r * 0.35f, c.y - r * 0.35f, r * 0.7f, r * 0.7f);
+            const float gr = r + 2.0f + (float) i * 3.6f;
+            g.setColour (col.withAlpha (0.11f * level * (1.0f - (float) i / 7.0f)));
+            g.fillEllipse (c.x - gr, c.y - gr, gr * 2, gr * 2);
         }
-        g.setColour (Colours::white.withAlpha (0.75f));
-        g.fillEllipse (c.x - r * 0.62f, c.y - r * 0.72f, r * 0.52f, r * 0.34f);
+        ColourGradient dome (col.brighter (0.9f).withAlpha (0.95f * level), c.x - r * 0.2f, c.y - r * 0.25f,
+                             col.darker (0.4f).withAlpha (0.9f * level), c.x + r, c.y + r, true);
+        g.setGradientFill (dome); g.fillEllipse (c.x - r, c.y - r, r * 2, r * 2);
+        g.setColour (Colours::white.withAlpha (0.65f * level)); g.fillEllipse (c.x - r * 0.35f, c.y - r * 0.38f, r * 0.7f, r * 0.62f);
+        g.setColour (Colours::white.withAlpha (0.7f)); g.fillEllipse (c.x - r * 0.62f, c.y - r * 0.72f, r * 0.48f, r * 0.30f);
     }
 
     void drawLeds (juce::Graphics& g)
     {
         using namespace juce;
         const auto now = Time::getMillisecondCounter();
-        // DRY FX : off / red / green / amber
         const int df = st.dryFx;
         const Colour dfCol = df == 1 ? Colour (0xffff2a1a) : df == 2 ? Colour (0xff2cff4a) : Colour (0xffffa514);
-        drawDomeLed (g, dryLed, 12.5f, dfCol, df == 0 ? 0.0f : 1.0f, Colour (0xffb9bcb6));
-        // Q : brightness grows with resonance
-        const float ql[4] = { 0.0f, 0.38f, 0.68f, 1.0f };
-        drawDomeLed (g, qLed, 13.0f, Colour (0xffffa20c), ql[st.q], Colour (0xff9a6510));
+        lightLed (g, dryLed, 12.5f, dfCol, df == 0 ? 0.0f : 1.0f);
+        const float ql[4] = { 0.0f, 0.35f, 0.66f, 1.0f };
+        lightLed (g, qLed, 12.0f, Colour (0xffffa20c), ql[st.q]);
 
-        // preset LEDs 1..8
         const bool holdBlink = knob->isHoldBlinking();
         const bool saveBlink = now - proc.getSaveBlinkStart() < 450;
         const bool blinkOn = ((now / 125) % 2) == 0;
@@ -506,20 +437,12 @@ private:
         {
             bool on = (i == st.selected);
             if (holdBlink || saveBlink) on = blinkOn;
-            const float y = presetLedY0 + presetLedDY * (float) i;
-            const auto r = Rectangle<float> (31.0f, 31.0f).withCentre ({ presetLedX, y });
-            if (on) g.drawImage (amberOn, r);
-            else
-            {   // unlit: amber lens, like the real pedal
-                g.drawImage (amberOff, r);
-                g.setOpacity (0.22f); g.drawImage (amberOn, r); g.setOpacity (1.0f);
-            }
+            if (on) lightLed (g, { presetLedX, presetLedY0 + presetLedDY * (float) i }, 10.5f, Colour (0xffffae1a), 1.0f);
         }
-        // PRESET red LED : solid = preset loaded, fast blink = edited
         bool pre = st.loaded >= 0 && st.loaded == st.selected;
         if (pre && st.modified) pre = ((now / 90) % 2) == 0;
-        g.drawImage (pre ? redOn : redOff, Rectangle<float> (40.0f, 40.0f).withCentre (redPreset));
-        g.drawImage (! st.bypassed ? redOn : redOff, Rectangle<float> (40.0f, 40.0f).withCentre (redBypass));
+        if (pre)          lightLed (g, redPreset, 13.5f, Colour (0xffff2414), 1.0f);
+        if (! st.bypassed) lightLed (g, redBypass, 13.5f, Colour (0xffff2414), 1.0f);
     }
 
     struct State
@@ -564,7 +487,7 @@ private:
     }
     static int roundToIntSafe (float v) { return juce::jlimit (0, 3, juce::roundToInt (v)); }
 
-    juce::Image bg, redOn, redOff, amberOn, amberOff;
+    juce::Image bg;
     FaderLnF lnf;
     juce::OwnedArray<Fader> faders;
     juce::OwnedArray<juce::AudioProcessorValueTreeState::SliderAttachment> atts;
@@ -587,18 +510,18 @@ static void showMainMenu (PedalContent& pc, juce::Component* from)
     auto& proc = pc.proc;
     auto* ed = &pc.editor;
     PopupMenu m;
-    m.addSectionHeader ("Fog2  -  Studio Wiga");
+    m.addSectionHeader ("Fog Z  -  Studio Wiga");
 
     PopupMenu size;
     const float cur = ed->getScale();
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < 4; ++i)
         size.addItem (100 + i, String (roundToInt (kMenuScales[i] * 100)) + " %" + (i == 0 ? " (default)" : ""),
                       true, std::abs (cur - kMenuScales[i]) < 0.01f);
     m.addSubMenu ("Plugin size", size);
 
     PopupMenu fac;
     const auto& list = getFactoryPresets();
-    for (int i = 0; i < (int) list.size(); ++i) fac.addItem (200 + i, list[(size_t) i].name);
+    for (int i = 0; i < (int) list.size(); ++i) fac.addItem (200 + i, String (i + 1) + ". " + list[(size_t) i].name);
     m.addSubMenu ("Factory sounds", fac);
     m.addItem (300, "Restore factory sounds in presets 1-8");
 
@@ -615,7 +538,7 @@ static void showMainMenu (PedalContent& pc, juce::Component* from)
     m.showMenuAsync (PopupMenu::Options().withTargetComponent (from), [sp, ed, &proc] (int r)
     {
         if (sp == nullptr || r == 0) return;
-        if (r >= 100 && r < 103)      ed->setScale (kMenuScales[r - 100]);
+        if (r >= 100 && r < 104)      ed->setScale (kMenuScales[r - 100]);
         else if (r >= 200 && r < 300) proc.applyFactory (r - 200);
         else if (r == 300)            proc.restoreFactorySlots();
         else if (r == 401)            proc.learnTarget = proc.learnTarget.load() == 1 ? 0 : 1;
@@ -655,9 +578,9 @@ FogEditor::FogEditor (FogProcessor& p) : AudioProcessorEditor (p), proc (p)
 {
     content = std::make_unique<PedalContent> (p, *this);
     addAndMakeVisible (*content);
-    const int minW = juce::roundToInt (kW * kDefaultScale), minH = juce::roundToInt (kH * kDefaultScale);
     setResizable (true, true);
-    setResizeLimits (minW, minH, juce::roundToInt (kW * kMaxScale), juce::roundToInt (kH * kMaxScale));
+    setResizeLimits (juce::roundToInt (kBaseW * kDefaultScale), juce::roundToInt (kBaseH * kDefaultScale),
+                     juce::roundToInt (kBaseW * kMaxScale),     juce::roundToInt (kBaseH * kMaxScale));
     getConstrainer()->setFixedAspectRatio ((double) kW / (double) kH);
     setScale (proc.uiScale.load());
 }
@@ -666,15 +589,14 @@ FogEditor::~FogEditor() = default;
 
 void FogEditor::resized()
 {
-    const float s = (float) getWidth() / (float) kW;
-    content->setTransform (juce::AffineTransform::scale (s));
-    proc.uiScale = juce::jlimit (kDefaultScale, kMaxScale, s);
+    content->setTransform (juce::AffineTransform::scale ((float) getWidth() / (float) kW));
+    proc.uiScale = juce::jlimit (kDefaultScale, kMaxScale, getScale());
 }
 
 void FogEditor::setScale (float s)
 {
     s = juce::jlimit (kDefaultScale, kMaxScale, s);
-    setSize (juce::roundToInt (kW * s), juce::roundToInt (kH * s));
+    setSize (juce::roundToInt (kBaseW * s), juce::roundToInt (kBaseH * s));
 }
 
-float FogEditor::getScale() const { return (float) getWidth() / (float) kW; }
+float FogEditor::getScale() const { return (float) getWidth() / kBaseW; }
