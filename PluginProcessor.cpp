@@ -112,7 +112,7 @@ void FogProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     for (int i = 0; i < 8; ++i) { sm[(size_t) i].reset (sampleRate, 0.03); sm[(size_t) i].setCurrentAndTargetValue (raw[(size_t) i]->load()); }
     bypassMix.reset (sampleRate, 0.015);
     bypassMix.setCurrentAndTargetValue (bypassParam->get() ? 1.0f : 0.0f);
-    dryEnv = 1.0f; fastEnv = slowEnv = 0.0f; dryHold = 0; dryRetrig = false; rmsEnv = peakHold = 0.0f; susGain = 1.0f; stopFast = stopSlow = 0.0f; stopGain = 1.0f;
+    dryEnv = 1.0f; fastEnv = slowEnv = 0.0f; dryHold = 0; dryRetrig = false; rmsEnv = peakHold = 0.0f; susGain = 1.0f; stopFast = stopSlow = 0.0f; stopGain = 1.0f; idleLvl = 0.0f; idleFloor = 3.0e-3f; idleGain = 0.0f; idleFreeze = 0; gateOpen = false; gateHold = 0;
 }
 
 void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -184,11 +184,17 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
     const int   hold  = (int) (0.08 * sr);
     const float hpCoef = 1.0f - std::exp (-2.0f * 3.14159265f * 16.0f / (float) sr);
     const float rmsC = 1.0f - std::exp (-1.0f / (0.040f * (float) sr));
-    const float stopFastC   = 1.0f - std::exp (-1.0f / (0.006f * (float) sr));
-    const float stopSlowUpC = 1.0f - std::exp (-1.0f / (0.004f * (float) sr));
-    const float stopSlowDnC = 1.0f - std::exp (-1.0f / (0.150f * (float) sr));
+    const float stopFastC     = 1.0f - std::exp (-1.0f / (0.010f * (float) sr));
+    const float stopSlowDecay = std::exp (-1.0f / (0.150f * (float) sr));
     const float stopDnC     = 1.0f - std::exp (-1.0f / (0.003f * (float) sr));
     const float stopUpC     = 1.0f - std::exp (-1.0f / (0.010f * (float) sr));
+    const float idleC     = 1.0f - std::exp (-1.0f / (0.020f * (float) sr));
+    const float idleFallC = 1.0f - std::exp (-1.0f / (0.080f * (float) sr));
+    const float idleRise  = std::pow (10.0f, 1.0f / 20.0f / (float) sr);                // floor may rise 1 dB/s
+    const float gateUpC   = 1.0f - std::exp (-1.0f / (0.002f * (float) sr));
+    const float gateDnC   = 1.0f - std::exp (-1.0f / (0.040f * (float) sr));
+    const int   gateHoldLen = (int) (0.060 * sr);
+    const int   idleFreezeLen = (int) (2.0 * sr);
     const float susC = 1.0f - std::exp (-1.0f / (0.030f * (float) sr));
     const float holdDecay = std::pow (10.0f, -4.0f / 20.0f / (float) sr);        // the held level fades 4 dB/s
     const float attNorm = juce::jlimit (0.0f, 1.0f, (raw[5]->load() - 0.02f) / 0.98f);
@@ -243,12 +249,28 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
         // ---- stop follower: when the guitar stops (palm mute, staccato, string damping) the narrow
         //      band filters would keep ringing ~80 ms as pure tones ("beeps"); duck the octaves
         //      as fast as the input drops ----
-        stopFast += (ax * ax - stopFast) * stopFastC;
-        stopSlow += (ax * ax - stopSlow) * (ax * ax > stopSlow ? stopSlowUpC : stopSlowDnC);
-        const float ratio = std::sqrt (stopFast / (stopSlow + 1.0e-12f));
-        const float stopTarget = juce::jlimit (0.0f, 1.0f, (ratio - 0.18f) / 0.42f);        // full at -4.4 dB, shut at -15 dB
+        stopFast += (ax * ax - stopFast) * stopFastC;                 // 10 ms RMS: no ripple on low notes
+        const float fr = std::sqrt (stopFast);
+        stopSlow = std::max (fr, stopSlow * stopSlowDecay);           // recent level, falls 150 ms
+        const float ratio = fr / (stopSlow + 1.0e-9f);
+        const float stopTarget = juce::jlimit (0.0f, 1.0f, (ratio - 0.45f) / 0.35f);        // full at -2 dB, shut at -7 dB
         stopGain += (stopTarget - stopGain) * (stopTarget < stopGain ? stopDnC : stopUpC);
         sus *= stopGain;
+
+        // ---- idle gate: guitar plugged in but not played (hum, buzz, hiss) -> octaves muted.
+        //      The idle floor is learnt continuously; the octaves open only 12 dB above it. ----
+        idleLvl += (ax * ax - idleLvl) * idleC;
+        const float lv = std::sqrt (idleLvl);
+        if (fastEnv > 2.2f * slowEnv + 1.0e-4f && fastEnv > 0.002f) idleFreeze = idleFreezeLen;   // a note was picked
+        if (lv < idleFloor) idleFloor += (lv - idleFloor) * idleFallC;
+        else if (idleFreeze > 0) --idleFreeze;                 // while playing the floor doesn't climb
+        else idleFloor *= idleRise;
+        const float openThr  = std::max (4.0f * idleFloor, 3.0e-4f);       // +12 dB over the floor, never below -70 dBFS
+        const float closeThr = std::max (2.0f * idleFloor, 1.5e-4f);
+        if (lv > openThr) { gateOpen = true; gateHold = gateHoldLen; }
+        else if (lv < closeThr) { if (gateHold > 0) --gateHold; else gateOpen = false; }
+        idleGain += ((gateOpen ? 1.0f : 0.0f) - idleGain) * (gateOpen ? gateUpC : gateDnC);
+        sus *= idleGain;
 
         float low = (gM2 * voices[0][i] + gM1 * voices[1][i]) * sus;
         hpState += (low - hpState) * hpCoef; low -= hpState;          // 16 Hz rumble filter on the sub octaves

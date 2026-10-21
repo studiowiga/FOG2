@@ -104,6 +104,7 @@ private:
     float dryEnv = 1.0f, fastEnv = 0, slowEnv = 0, dryHold = 0; bool dryRetrig = false;
     float rmsEnv = 0.0f, peakHold = 0.0f, susGain = 1.0f;
     float stopFast = 0.0f, stopSlow = 0.0f, stopGain = 1.0f;
+    float idleLvl = 0.0f, idleFloor = 3.0e-3f, idleGain = 0.0f; bool gateOpen = false; int gateHold = 0, idleFreeze = 0;
     double sr = 48000.0;
     int preparedBlock = 512;
     float hpState = 0.0f;

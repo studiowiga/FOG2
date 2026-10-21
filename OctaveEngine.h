@@ -79,7 +79,7 @@ public:
         slowCoef = 1.0f - std::exp (-1.0f / (0.060f * fs));
         duckStep = 1.0f / (0.003f * fs);
         nfFall   = 1.0f - std::exp (-1.0f / (0.030f * fs));
-        nfRise   = std::pow (10.0f, 4.0f / 20.0f / fs);      // the noise floor estimate climbs 4 dB/s at most
+        nfRise   = std::pow (10.0f, 1.5f / 20.0f / fs);      // the noise floor estimate climbs 1.5 dB/s at most (long EBow notes stay)
         reset();
     }
 
