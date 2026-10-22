@@ -489,21 +489,28 @@ private:
     struct State
     {
         int dryFx = 0, q = 0, selected = 0, loaded = -1; bool modified = false, bypassed = false, blink = false;
+        bool presetBlink = false, presetBlinkOn = false;   // clignotement des LED de preset (maintien / sauvegarde)
         bool operator!= (const State& o) const
-        { return dryFx != o.dryFx || q != o.q || selected != o.selected || loaded != o.loaded || modified != o.modified || bypassed != o.bypassed || blink != o.blink; }
+        { return dryFx != o.dryFx || q != o.q || selected != o.selected || loaded != o.loaded || modified != o.modified || bypassed != o.bypassed || blink != o.blink
+              || presetBlink != o.presetBlink || presetBlinkOn != o.presetBlinkOn; }
     };
 
     void timerCallback() override
     {
+        editor.useSoftwareRenderer();   // au cas où la fenêtre a été recréée par l'hôte (changement d'écran, d'échelle…)
+
         State s;
         s.dryFx = roundToIntSafe (proc.apvts.getRawParameterValue (FogIDs::dryFx)->load());
         s.q     = roundToIntSafe (proc.apvts.getRawParameterValue (FogIDs::q)->load());
         s.selected = proc.getSelected(); s.loaded = proc.getLoaded();
         s.modified = proc.isModified(); s.bypassed = proc.isBypassed();
         const auto now = juce::Time::getMillisecondCounter();
-        const bool anyBlink = knob->isHoldBlinking() || now - proc.getSaveBlinkStart() < 500 || (s.modified && s.loaded == s.selected);
-        s.blink = anyBlink ? (((now / 90) % 2) == 0) : false;
-        if (s != st || anyBlink)
+        // l'état mémorise exactement ce que drawLeds() affiche (mêmes conditions, mêmes phases de clignotement) :
+        // on ne redessine les LED que lorsqu'une d'elles change vraiment (zéro travail au repos)
+        s.blink = (s.modified && s.loaded == s.selected) ? (((now / 90) % 2) == 0) : false;
+        s.presetBlink   = knob->isHoldBlinking() || now - proc.getSaveBlinkStart() < 450;
+        s.presetBlinkOn = s.presetBlink ? (((now / 125) % 2) == 0) : false;
+        if (s != st)
         {
             if (s.selected != st.selected) knobBubbleUntil = now + 1200;
             st = s;
@@ -516,15 +523,20 @@ private:
         // hover tracking for the value bubble
         int hv = -1;
         for (auto* f : faders) if (f->isMouseOverOrDragging()) hv = f->index;
-        const bool bubbleWanted = hv >= 0 || dragging || now < bubbleUntil || now < flashUntil;
         if (hv != hoverFader) { hoverFader = hv; if (hv >= 0) activeFader = hv; }
-        if (bubbleWanted || hadBubble)
+        // bulle : on ne redessine que si son contenu change (mêmes conditions que paintOverChildren)
+        juce::String bubble;
+        if (activeFader >= 0 && (dragging || hoverFader == activeFader || now < bubbleUntil))
+            bubble = juce::String (activeFader) + ":" + juce::String (faders[activeFader]->getValue(), 5);
+        else if (now < flashUntil)
+            bubble = "flash:" + flashText;
+        if (bubble != drawnBubble)
         {
+            drawnBubble = bubble;
             if (! lastBubble.isEmpty()) repaint (lastBubble);
             repaint (juce::Rectangle<int> (0, 100, kW, 460));       // fader / knob zone
             repaint (juce::Rectangle<int> (420, 480, 500, 80));
         }
-        hadBubble = bubbleWanted;
     }
     static int roundToIntSafe (float v) { return juce::jlimit (0, 3, juce::roundToInt (v)); }
 
@@ -536,7 +548,8 @@ private:
     std::unique_ptr<PresetKnob> knob;
     std::unique_ptr<Footswitch> fsPre, fsByp;
     State st;
-    int activeFader = -1, hoverFader = -1; bool dragging = false, hadBubble = false;
+    int activeFader = -1, hoverFader = -1; bool dragging = false;
+    juce::String drawnBubble;      // dernier contenu de bulle réellement dessiné
     juce::uint32 bubbleUntil = 0, knobBubbleUntil = 0, flashUntil = 0;
     juce::String flashText;
     juce::Rectangle<int> lastBubble;
@@ -628,6 +641,27 @@ FogEditor::FogEditor (FogProcessor& p) : AudioProcessorEditor (p), proc (p)
 }
 
 FogEditor::~FogEditor() = default;
+
+// Anti-gel de la fenêtre (Windows) : JUCE 8 dessine par défaut avec Direct2D (carte graphique).
+// Avec certains pilotes (Intel notamment) la fenêtre du plugin cesse de se rafraîchir alors que
+// le DAW continue de tourner. Le moteur logiciel est stable partout et largement assez rapide ici.
+void FogEditor::useSoftwareRenderer()
+{
+   #if JUCE_WINDOWS
+    if (auto* peer = getPeer())
+    {
+        int sw = peer->getAvailableRenderingEngines().indexOf ("Software Renderer");
+        if (sw < 0) sw = 0;
+        if (peer->getCurrentRenderingEngine() != sw)
+            peer->setCurrentRenderingEngine (sw);
+    }
+   #endif
+}
+
+void FogEditor::parentHierarchyChanged()
+{
+    useSoftwareRenderer();
+}
 
 void FogEditor::resized()
 {
