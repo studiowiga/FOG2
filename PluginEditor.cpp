@@ -52,7 +52,7 @@ namespace
 }
 
 class PedalContent;
-static void showMainMenu (PedalContent&, juce::Component* from);
+static void showMainMenu (PedalContent&, juce::Component* from, int learnIdx = -1);   // learnIdx >= 0 : clic droit sur une commande
 
 // menus are drawn at normal desktop size (not scaled down with the pedal) and with a larger font
 struct MenuLnF : public juce::LookAndFeel_V4
@@ -115,7 +115,7 @@ public:
     }
     void mouseDown (const juce::MouseEvent& e) override
     {
-        if (e.mods.isPopupMenu()) { popup = true; showMainMenu (owner, this); return; }
+        if (e.mods.isPopupMenu()) { popup = true; showMainMenu (owner, this, index); return; }
         popup = false; Slider::mouseDown (e);
     }
     void mouseDrag (const juce::MouseEvent& e) override { if (! popup) Slider::mouseDrag (e); }
@@ -148,12 +148,13 @@ public:
         }
     }
     juce::Image face;
+    int learnIdx = -1;             // commande MIDI Learn (DRY FX / Q)
     juce::Point<float> centre;     // exact centre in pedal coordinates
     juce::Point<float> localCentre() const { return centre - getPosition().toFloat(); }
     bool hitTest (int x, int y) override { return localCentre().getDistanceFrom ({ (float) x, (float) y }) < btnR + 2; }
     void mouseDown (const juce::MouseEvent& e) override
     {
-        if (e.mods.isPopupMenu()) { showMainMenu (owner, this); return; }
+        if (e.mods.isPopupMenu()) { showMainMenu (owner, this, learnIdx); return; }
         pressed = true; repaint();
         if (onPress) onPress();
     }
@@ -233,7 +234,7 @@ public:
     void mouseExit  (const juce::MouseEvent&) override { hover = false; }
     void mouseDown (const juce::MouseEvent& e) override
     {
-        if (e.mods.isPopupMenu()) { showMainMenu (owner, this); popup = true; return; }
+        if (e.mods.isPopupMenu()) { showMainMenu (owner, this, FogProcessor::learnKnob); popup = true; return; }
         popup = false; down = true; dragged = false; saved = false;
         downTime = juce::Time::getMillisecondCounter();
         lastPos = e.position; acc = 0.0f; travel = 0.0f;
@@ -364,8 +365,10 @@ public:
             flash (label + ": " + names[nxt]);
         };
         dryBtnC = std::make_unique<PlasticButton> (*this);
+        dryBtnC->learnIdx = FogProcessor::learnDryFx;
         dryBtnC->onPress = [cycle] { cycle (FogIDs::dryFx, "DRY FX", { "DRY CLEAN", "ATTACK", "ATTACK + LP", "ATTACK + LP + DETUNE" }); };
         qBtnC = std::make_unique<PlasticButton> (*this);
+        qBtnC->learnIdx = FogProcessor::learnQ;
         qBtnC->onPress = [cycle] { cycle (FogIDs::q, "FILTER Q", { "1 (FLAT)", "2", "3", "4 (PEAK)" }); };
         for (auto [b, c] : { std::pair<PlasticButton*, juce::Point<float>> { dryBtnC.get(), dryBtn }, { qBtnC.get(), qBtn } })
         {
@@ -449,6 +452,8 @@ public:
     void mouseMove (const juce::MouseEvent&) override {}
 
     void flash (const juce::String& t) { flashText = t; flashUntil = juce::Time::getMillisecondCounter() + 1400; repaint(); }
+    // message MIDI Learn : la bulle seule est redessinée par le timer (pas toute la pédale)
+    void flashFor (const juce::String& t, juce::uint32 ms) { flashText = t; flashUntil = juce::Time::getMillisecondCounter() + ms; }
     void showValue (int i) { activeFader = i; repaint(); }
     void setHoverFader (int i) { hoverFader = i; if (i >= 0) activeFader = i; repaint(); }
 
@@ -576,6 +581,21 @@ private:
             askRepaint (juce::Rectangle<int> (56, 56).withCentre (redPreset.toInt()));
             askRepaint (juce::Rectangle<int> (56, 56).withCentre (redBypass.toInt()));
         }
+        // MIDI Learn : attente puis confirmation 2 s dans la bulle de message
+        {
+            const int learned = proc.lastLearned.exchange (-1);
+            const int lt = proc.learnTarget.load();
+            if (learned >= 0)
+            {
+                flashFor (juce::String (FogProcessor::learnDef (learned).name) + " = CC " + juce::String (proc.ccMap[learned].load()), 2000);
+                activeFader = -1;
+            }
+            else if (lt >= 0)
+            {
+                flashFor ("MIDI LEARN: move a control for " + juce::String (FogProcessor::learnDef (lt).name), 150);
+                if (! dragging) activeFader = -1;
+            }
+        }
         // hover tracking for the value bubble
         int hv = -1;
         for (auto* f : faders) if (f->isMouseOverOrDragging()) hv = f->index;
@@ -591,7 +611,7 @@ private:
             drawnBubble = bubble;
             if (! lastBubble.isEmpty()) askRepaint (lastBubble);
             askRepaint (juce::Rectangle<int> (0, 100, kW, 460));       // fader / knob zone
-            askRepaint (juce::Rectangle<int> (420, 480, 500, 80));
+            askRepaint (juce::Rectangle<int> (300, 480, 750, 80));
         }
     }
     static int roundToIntSafe (float v) { return juce::jlimit (0, 3, juce::roundToInt (v)); }
@@ -619,13 +639,38 @@ private:
 // =============================================================================
 //  Menus
 // =============================================================================
-static void showMainMenu (PedalContent& pc, juce::Component* from)
+// MIDI Learn : section en tête du menu quand on clique droit sur une commande
+static void addLearnSection (juce::PopupMenu& m, FogProcessor& proc, int idx)
+{
+    using namespace juce;
+    const int cc = proc.ccMap[idx].load(), lt = proc.learnTarget.load();
+    const String name = FogProcessor::learnDef (idx).name;
+    m.addSectionHeader (name);
+    m.addItem (1000 + idx, "MIDI Learn: " + name + " (" + (cc >= 0 ? "CC " + String (cc) : String ("none")) + ")", true, lt == idx);
+    m.addItem (1100 + idx, "Clear MIDI: " + name, cc >= 0);
+    if (lt >= 0) m.addItem (1200, "Cancel MIDI learn");
+    m.addSeparator();
+}
+
+static bool handleLearnResult (FogProcessor& proc, int r)
+{
+    if (r >= 1000 && r < 1000 + FogProcessor::numLearn)
+        proc.learnTarget = proc.learnTarget.load() == r - 1000 ? -1 : r - 1000;     // re-cliquer annule
+    else if (r >= 1100 && r < 1100 + FogProcessor::numLearn) proc.ccMap[r - 1100].store (-1);
+    else if (r == 1200) proc.learnTarget = -1;
+    else if (r == 1201) { proc.learnTarget = -1; proc.resetMidiMap(); }
+    else return false;
+    return true;
+}
+
+static void showMainMenu (PedalContent& pc, juce::Component* from, int learnIdx)
 {
     using namespace juce;
     auto& proc = pc.proc;
     auto* ed = &pc.editor;
     PopupMenu m;
     m.setLookAndFeel (&menuLnF());
+    if (learnIdx >= 0) addLearnSection (m, proc, learnIdx);
     m.addSectionHeader ("Fog Z  -  Studio Wiga");
 
     PopupMenu size; size.setLookAndFeel (&menuLnF());
@@ -643,8 +688,12 @@ static void showMainMenu (PedalContent& pc, juce::Component* from)
 
     PopupMenu midi; midi.setLookAndFeel (&menuLnF());
     auto ccName = [] (int cc) { return cc < 0 ? String ("none") : "CC " + String (cc); };
-    midi.addItem (401, "Preset footswitch: " + ccName (proc.ccPreset.load()) + "  -  learn...", true, proc.learnTarget.load() == 1);
-    midi.addItem (402, "Bypass footswitch: " + ccName (proc.ccBypass.load()) + "  -  learn...", true, proc.learnTarget.load() == 2);
+    for (int i = 0; i < FogProcessor::numLearn; ++i)
+        midi.addItem (1000 + i, "Learn: " + String (FogProcessor::learnDef (i).name) + " (" + ccName (proc.ccMap[i].load()) + ")",
+                      true, proc.learnTarget.load() == i);
+    midi.addSeparator();
+    if (proc.learnTarget.load() >= 0) midi.addItem (1200, "Cancel MIDI learn");
+    midi.addItem (1201, "Reset MIDI to defaults (footswitches CC 80 / 81)");
     midi.addItem (403, "Latching MIDI pedals (127 / 0 on each press)", true, proc.latchingPedals.load());
     midi.addSeparator();
     midi.addItem (404, "Program Change 1-8 loads presets 1-8", false, false);
@@ -657,9 +706,8 @@ static void showMainMenu (PedalContent& pc, juce::Component* from)
         if (r >= 100 && r < 104)      ed->setScale (kMenuScales[r - 100]);
         else if (r >= 200 && r < 300) proc.applyFactory (r - 200);
         else if (r == 300)            proc.restoreFactorySlots();
-        else if (r == 401)            proc.learnTarget = proc.learnTarget.load() == 1 ? 0 : 1;
-        else if (r == 402)            proc.learnTarget = proc.learnTarget.load() == 2 ? 0 : 2;
         else if (r == 403)            proc.latchingPedals = ! proc.latchingPedals.load();
+        else                          handleLearnResult (proc, r);
     });
 }
 
@@ -667,23 +715,20 @@ void PedalContent::showFootswitchMenu (int which, juce::Component* from)
 {
     using namespace juce;
     PopupMenu m; m.setLookAndFeel (&menuLnF());
-    const int cc = which == 1 ? proc.ccPreset.load() : proc.ccBypass.load();
-    m.addSectionHeader (which == 1 ? "PRESET footswitch" : "BYPASS footswitch");
-    m.addItem (1, "MIDI learn (move a pedal / button now)", true, proc.learnTarget.load() == which);
-    m.addItem (2, cc < 0 ? String ("No MIDI CC assigned") : "Clear MIDI CC " + String (cc), cc >= 0);
+    const int idx = which == 1 ? FogProcessor::learnPresetFs : FogProcessor::learnBypassFs;
+    addLearnSection (m, proc, idx);
     m.addItem (3, "Latching MIDI pedals", true, proc.latchingPedals.load());
     m.addSeparator();
     m.addItem (4, "More...");
     Component::SafePointer<PedalContent> sp (this);
     Component::SafePointer<Component> src (from);
-    m.showMenuAsync (menuOptions(), [sp, src, which] (int r)
+    m.showMenuAsync (menuOptions(), [sp, src, idx] (int r)
     {
-        if (sp == nullptr) return;
+        if (sp == nullptr || r == 0) return;
         auto& p = sp->proc;
-        if (r == 1) { p.learnTarget = p.learnTarget.load() == which ? 0 : which; sp->flash ("MIDI LEARN: PRESS YOUR PEDAL"); }
-        if (r == 2) { if (which == 1) p.ccPreset = -1; else p.ccBypass = -1; }
         if (r == 3) p.latchingPedals = ! p.latchingPedals.load();
-        if (r == 4 && src != nullptr) showMainMenu (*sp, src);
+        else if (r == 4 && src != nullptr) showMainMenu (*sp, src);
+        else handleLearnResult (p, r);
     });
 }
 

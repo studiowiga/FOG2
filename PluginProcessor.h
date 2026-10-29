@@ -71,9 +71,17 @@ public:
     juce::uint32 getSaveBlinkStart() const { return saveBlinkStart.load(); }
     bool isBypassed() const { return bypassParam->get(); }
 
-    // ---------------- MIDI footswitches ----------------
-    std::atomic<int> ccPreset { 80 }, ccBypass { 81 };
-    std::atomic<int> learnTarget { 0 };           // 0 none, 1 preset footswitch, 2 bypass footswitch
+    // ---------------- MIDI : MIDI Learn sur toutes les commandes (v1.4) ----------------
+    // footswitches PRESET / BYPASS sur CC 80 / 81 par défaut (comme avant), les autres commandes non assignées
+    enum LearnType { learnContinuous, learnToggle, learnSelector, learnFootswitch };
+    struct LearnDef { const char* id; const char* name; int defaultCC; int type; int positions; };
+    static constexpr int numLearn = 13;
+    static constexpr int learnDryFx = 8, learnQ = 9, learnKnob = 10, learnPresetFs = 11, learnBypassFs = 12;
+    static const LearnDef& learnDef (int i);
+    std::atomic<int> ccMap[numLearn];             // numéro de CC de chaque commande, -1 = non assigné
+    std::atomic<int> learnTarget { -1 };          // commande en attente d'un CC (-1 = pas de learn)
+    std::atomic<int> lastLearned { -1 };          // dernière commande apprise (lue et remise à -1 par la fenêtre)
+    void resetMidiMap();
     std::atomic<bool> latchingPedals { false };    // pedal sends 127 / 0 on alternate presses
     std::atomic<float> uiScale { 0.67f };          // window scale (0.67 = default, never smaller)
 
@@ -88,12 +96,14 @@ private:
     std::atomic<int> selected { 0 }, loaded { -1 };
     std::atomic<juce::uint32> saveBlinkStart { 0 };
     std::atomic<int> pendingPresetPress { 0 }, pendingProgram { -1 }, pendingFactory { -1 }, currentProgram { 0 };
-    // anti-gel v2 : valeur demandée par le MIDI (thread audio), transmise à l'hôte par le timer du processeur
-    static constexpr int numQueued = 1;
-    static const char* queuedId (int i);              // "bypass"
-    std::atomic<float> pendingValue[numQueued];
-    std::atomic<bool>  pendingSet[numQueued];
+    // anti-gel v2 : valeur (0..1 normalisée) demandée par le MIDI (thread audio), transmise à l'hôte par le timer
+    // du processeur ; une case par commande apprenable (index LearnDef)
+    std::atomic<float> pendingValue[numLearn];
+    std::atomic<bool>  pendingSet[numLearn];
+    juce::RangedAudioParameter* learnParam[numLearn] {};   // pointeurs mis en cache (aucune recherche par chaîne dans l'audio)
+    void queueParam (int i, float norm01);
     int lastCcVal[128] {};
+    int lastKnobPos = -1;                                  // bouton PRESET piloté en CC : charge seulement au changement de cran
 
     std::array<std::atomic<float>*, 8> raw {};
     std::atomic<float>* rawDryFx = nullptr; std::atomic<float>* rawQ = nullptr; std::atomic<float>* rawBypass = nullptr;

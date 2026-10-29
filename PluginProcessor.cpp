@@ -27,6 +27,35 @@ const std::vector<FactoryPreset>& getFactoryPresets()
 }
 
 // ============================================================================
+//  MIDI Learn (v1.4) : toutes les commandes de la façade
+// ============================================================================
+const FogProcessor::LearnDef& FogProcessor::learnDef (int i)
+{
+    static const LearnDef defs[numLearn] =
+    {
+        { "dry",      "Dry Output",        -1, learnContinuous, 0 },
+        { "octm2",    "-2 Octaves",        -1, learnContinuous, 0 },
+        { "octm1",    "-1 Octave",         -1, learnContinuous, 0 },
+        { "octp1",    "+1 Octave",         -1, learnContinuous, 0 },
+        { "octp2",    "+2 Octaves",        -1, learnContinuous, 0 },
+        { "attack",   "Attack",            -1, learnContinuous, 0 },
+        { "lpf",      "LP Filter",         -1, learnContinuous, 0 },
+        { "detune",   "Detune",            -1, learnContinuous, 0 },
+        { "dryfx",    "Dry FX",            -1, learnSelector,   4 },   // CC réparti sur les 4 positions
+        { "q",        "Filter Q",          -1, learnSelector,   4 },
+        { "presetKnob", "Preset knob",     -1, learnSelector,   8 },   // charge le preset 1-8 (comme tourner le bouton)
+        { "presetFs", "Preset footswitch", 80, learnFootswitch, 0 },   // CC 80 / 81 : numéros d'origine
+        { "bypass",   "Bypass footswitch", 81, learnFootswitch, 0 },
+    };
+    return defs[juce::jlimit (0, numLearn - 1, i)];
+}
+
+void FogProcessor::resetMidiMap()
+{
+    for (int i = 0; i < numLearn; ++i) ccMap[i].store (learnDef (i).defaultCC);
+}
+
+// ============================================================================
 static float levelGain (float s)      { return s * s * 1.5625f; }          // unity at 80 %
 static float attackSeconds (float s)  { return s < 0.02f ? 0.0f : 0.010f * std::pow (300.0f, (s - 0.02f) / 0.98f); }
 static float cutoffHz (float s)       { return 50.0f * std::pow (360.0f, s); }
@@ -52,7 +81,12 @@ FogProcessor::FogProcessor()
     bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter (FogIDs::bypass));
     restoreFactorySlots();
     loaded = 0;
-    for (int i = 0; i < numQueued; ++i) { pendingValue[i] = 0.0f; pendingSet[i] = false; }
+    for (int i = 0; i < numLearn; ++i)
+    {
+        pendingValue[i] = 0.0f; pendingSet[i] = false;
+        learnParam[i] = (i == learnKnob || i == learnPresetFs) ? nullptr : apvts.getParameter (learnDef (i).id);
+    }
+    resetMidiMap();
     startTimerHz (60);   // anti-gel v2 : aucun appel à l'hôte depuis le thread audio
 }
 
@@ -129,7 +163,7 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
     if (n == 0) return;
     if (work.getNumSamples() < n) work.setSize (5, n, false, true, true);
 
-    // ---------------- MIDI: footswitch CCs + program change ----------------
+    // ---------------- MIDI: commandes apprises (MIDI Learn), footswitches CC 80 / 81, program change ----------------
     for (const auto meta : midi)
     {
         const auto m = meta.getMessage();
@@ -137,24 +171,45 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
         {
             const int cc = m.getControllerNumber(), val = m.getControllerValue();
             const int lt = learnTarget.load();
-            if (lt != 0 && val >= 64)
+            // MIDI Learn : le CC reçu est affecté à la commande visée (il n'agit pas sur le son) ;
+            // footswitch : seulement à l'appui (>= 64), comme avant
+            if (lt >= 0 && lt < numLearn && cc < 120 && (learnDef (lt).type != learnFootswitch || val >= 64))
             {
-                if (lt == 1) ccPreset = cc; else ccBypass = cc;
-                if (ccPreset.load() == ccBypass.load()) { if (lt == 1) ccBypass = -1; else ccPreset = -1; }
-                learnTarget = 0; lastCcVal[cc] = val; continue;
+                for (int j = 0; j < numLearn; ++j)
+                    if (j != lt && ccMap[j].load() == cc) ccMap[j].store (-1);   // numéro déjà pris : l'autre commande est désassignée
+                ccMap[lt].store (cc);
+                if (lt == learnKnob) lastKnobPos = -1;
+                lastLearned.store (lt);
+                learnTarget.store (-1); lastCcVal[cc] = val; continue;
             }
             const bool wasOn = lastCcVal[cc] >= 64, isOn = val >= 64;
             lastCcVal[cc] = val;
             const bool fire = latchingPedals.load() ? (wasOn != isOn) : (isOn && ! wasOn);
             // anti-gel v2 : rien n'est envoyé à l'hôte d'ici, le timer du processeur s'en charge
-            if (fire && cc == ccPreset.load()) ++pendingPresetPress;
-            if (fire && cc == ccBypass.load())
+            for (int i = 0; i < numLearn; ++i)
             {
-                // bascule : valeur déjà en file si elle existe, sinon valeur courante
-                const float cur = pendingSet[0].load (std::memory_order_acquire) ? pendingValue[0].load (std::memory_order_relaxed)
-                                                                                 : rawBypass->load (std::memory_order_relaxed);
-                pendingValue[0].store (cur > 0.5f ? 0.0f : 1.0f, std::memory_order_relaxed);
-                pendingSet[0].store (true, std::memory_order_release);
+                if (ccMap[i].load (std::memory_order_relaxed) != cc) continue;
+                const auto& d = learnDef (i);
+                if (d.type == learnContinuous)
+                    queueParam (i, (float) val / 127.0f);                 // lissage existant des faders (30 ms)
+                else if (d.type == learnSelector)
+                {
+                    const int pos = juce::jmin (d.positions - 1, val * d.positions / 128);
+                    if (i == learnKnob)
+                    {
+                        if (pos != lastKnobPos) { lastKnobPos = pos; pendingProgram = pos; }
+                    }
+                    else if (learnParam[i] != nullptr)
+                        queueParam (i, learnParam[i]->convertTo0to1 ((float) pos));
+                }
+                else if (fire && i == learnPresetFs) ++pendingPresetPress;
+                else if (fire && i == learnBypassFs)
+                {
+                    // bascule : valeur déjà en file si elle existe, sinon valeur courante
+                    const float cur = pendingSet[i].load (std::memory_order_acquire) ? pendingValue[i].load (std::memory_order_relaxed)
+                                                                                     : rawBypass->load (std::memory_order_relaxed);
+                    queueParam (i, cur > 0.5f ? 0.0f : 1.0f);
+                }
             }
         }
         else if (m.isProgramChange() && m.getProgramChangeNumber() < 8)
@@ -400,10 +455,10 @@ bool FogProcessor::isModified() const
 // Anti-gel v2 (Studio Wiga) : jamais d'appel à l'hôte (setValueNotifyingHost, triggerAsyncUpdate) depuis le thread audio.
 // Le MIDI met ses demandes en file (pendingValue / pendingSet, compteurs) ; ce timer (60 Hz, thread de messages)
 // les transmet au DAW et à la fenêtre.
-const char* FogProcessor::queuedId (int i)
+void FogProcessor::queueParam (int i, float norm01)
 {
-    static const char* ids[numQueued] = { FogIDs::bypass };
-    return ids[juce::jlimit (0, numQueued - 1, i)];
+    pendingValue[i].store (juce::jlimit (0.0f, 1.0f, norm01), std::memory_order_relaxed);
+    pendingSet[i].store (true, std::memory_order_release);
 }
 
 void FogProcessor::timerCallback()
@@ -413,9 +468,14 @@ void FogProcessor::timerCallback()
     const int pg = pendingProgram.exchange (-1);
     if (pg >= 0) loadPreset (pg);
     for (int k = pendingPresetPress.exchange (0); k > 0; --k) presetFootswitch();
-    for (int i = 0; i < numQueued; ++i)
+    for (int i = 0; i < numLearn; ++i)
         if (pendingSet[i].exchange (false, std::memory_order_acquire))
-            setParam (queuedId (i), pendingValue[i].load (std::memory_order_relaxed));
+            if (auto* prm = learnParam[i])
+            {
+                prm->beginChangeGesture();
+                prm->setValueNotifyingHost (pendingValue[i].load (std::memory_order_relaxed));
+                prm->endChangeGesture();
+            }
 }
 
 // ============================================================================
@@ -440,8 +500,10 @@ void FogProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("selected", selected.load(), nullptr);
     state.setProperty ("loaded", loaded.load(), nullptr);
     state.setProperty ("uiScale2", uiScale.load(), nullptr);
-    state.setProperty ("ccPreset", ccPreset.load(), nullptr);
-    state.setProperty ("ccBypass", ccBypass.load(), nullptr);
+    state.setProperty ("ccPreset", ccMap[learnPresetFs].load(), nullptr);    // anciennes versions
+    state.setProperty ("ccBypass", ccMap[learnBypassFs].load(), nullptr);
+    for (int i = 0; i < numLearn; ++i)
+        state.setProperty (juce::String ("cc_") + learnDef (i).id, ccMap[i].load(), nullptr);
     state.setProperty ("latching", latchingPedals.load(), nullptr);
     state.setProperty ("program", currentProgram.load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
@@ -472,8 +534,14 @@ void FogProcessor::setStateInformation (const void* data, int size)
     selected   = juce::jlimit (0, 7, (int) state.getProperty ("selected", 0));
     loaded     = juce::jlimit (-1, 7, (int) state.getProperty ("loaded", -1));
     uiScale    = juce::jlimit (0.67f, 1.25f, (float) state.getProperty ("uiScale2", 0.67f));
-    ccPreset   = (int) state.getProperty ("ccPreset", 80);
-    ccBypass   = (int) state.getProperty ("ccBypass", 81);
+    // assignations MIDI Learn (projet d'avant la v1.4 : footswitches ccPreset / ccBypass, le reste non assigné)
+    for (int i = 0; i < numLearn; ++i)
+    {
+        int def = learnDef (i).defaultCC;
+        if (i == learnPresetFs) def = (int) state.getProperty ("ccPreset", def);
+        if (i == learnBypassFs) def = (int) state.getProperty ("ccBypass", def);
+        ccMap[i].store (juce::jlimit (-1, 127, (int) state.getProperty (juce::String ("cc_") + learnDef (i).id, def)));
+    }
     latchingPedals = (bool) state.getProperty ("latching", false);
     currentProgram = (int) state.getProperty ("program", 0);
     apvts.replaceState (state);
