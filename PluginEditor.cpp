@@ -631,7 +631,7 @@ static void showMainMenu (PedalContent& pc, juce::Component* from)
     PopupMenu size; size.setLookAndFeel (&menuLnF());
     const float cur = ed->getScale();
     for (int i = 0; i < 4; ++i)
-        size.addItem (100 + i, String (roundToInt (kMenuScales[i] * 100)) + " %" + (i == 0 ? " (default)" : ""),
+        size.addItem (100 + i, i == 0 ? String ("60 % (default)") : String (roundToInt (kMenuScales[i] * 100)) + " %",
                       true, std::abs (cur - kMenuScales[i]) < 0.01f);
     m.addSubMenu ("Plugin size", size);
 

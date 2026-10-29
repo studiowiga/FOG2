@@ -40,3 +40,5 @@ Double-clic sur un fader = valeur par défaut. MIDI (clic droit) : footswitch PR
 
 ## Moteur
 ~190 filtres passe-bande complexes à 3 étages (≈ 3 par demi-ton au-dessus de 360 Hz) ; dans chaque bande la phase est multipliée (+1 / +2) ou divisée (-1 / -2) ; seules les bandes qui sont un pic du spectre parlent → chaque corde d'un accord garde sa propre octave. Les bandes sous 1 kHz tournent à ~12 kHz pour économiser le processeur. Limiteur doux en sortie, filtre anti-grondement 16 Hz sur les octaves basses. Porte de bruit par bande (le souffle et le ronflement ne déclenchent plus de notes) et suiveur d’arrêt : quand la guitare s’arrête net, les octaves se coupent aussitôt au lieu de sonner ~80 ms en « bip ». Porte de repos : guitare branchée mais pas jouée (ronflement, buzz, souffle), les octaves restent muettes ; elles ne s’ouvrent qu’à +12 dB au-dessus du bruit de fond appris en continu.
+
+- v1.3.1 : menu de taille de fenêtre : « 60 % (default) », 75 %, 100 % (plus de taille en pixels)
