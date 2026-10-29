@@ -24,11 +24,11 @@ struct FogPreset
 struct FactoryPreset { const char* name; FogPreset p; };
 const std::vector<FactoryPreset>& getFactoryPresets();
 
-class FogProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
+class FogProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
     FogProcessor();
-    ~FogProcessor() override = default;
+    ~FogProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -81,17 +81,22 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
-    void handleAsyncUpdate() override;
+    void timerCallback() override;          // anti-gel v2 : vide la file des demandes du thread audio (60 Hz)
     void setParam (const char* id, float plainValue);
 
     std::array<FogPreset, 8> slots;
     std::atomic<int> selected { 0 }, loaded { -1 };
     std::atomic<juce::uint32> saveBlinkStart { 0 };
-    std::atomic<int> pendingPresetPress { 0 }, pendingBypass { 0 }, pendingProgram { -1 }, pendingFactory { -1 }, currentProgram { 0 };
+    std::atomic<int> pendingPresetPress { 0 }, pendingProgram { -1 }, pendingFactory { -1 }, currentProgram { 0 };
+    // anti-gel v2 : valeur demandée par le MIDI (thread audio), transmise à l'hôte par le timer du processeur
+    static constexpr int numQueued = 1;
+    static const char* queuedId (int i);              // "bypass"
+    std::atomic<float> pendingValue[numQueued];
+    std::atomic<bool>  pendingSet[numQueued];
     int lastCcVal[128] {};
 
     std::array<std::atomic<float>*, 8> raw {};
-    std::atomic<float>* rawDryFx = nullptr; std::atomic<float>* rawQ = nullptr;
+    std::atomic<float>* rawDryFx = nullptr; std::atomic<float>* rawQ = nullptr; std::atomic<float>* rawBypass = nullptr;
     juce::AudioParameterBool* bypassParam = nullptr;
 
     // DSP

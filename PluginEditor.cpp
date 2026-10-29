@@ -397,10 +397,26 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
-        g.drawImageAt (bg, 0, 0);
+        // anti-gel v2 : aucun calcul lourd ici, on dessine le fond déjà mis à l'échelle par le timer (ou l'original en attendant)
+        lastPaintMs = juce::Time::getMillisecondCounterHiRes();
+        repaintAskedMs = 0.0;
+        g.fillAll (juce::Colours::black);
+        if (bgCache.isValid())
+        {
+            g.setImageResamplingQuality (juce::Graphics::mediumResamplingQuality);
+            g.drawImageTransformed (bgCache, juce::AffineTransform::scale ((float) kW / (float) bgCache.getWidth(),
+                                                                           (float) kH / (float) bgCache.getHeight()));
+        }
+        else
+        {
+            g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+            g.drawImageAt (bg, 0, 0);
+        }
         drawLeds (g);
     }
+
+    void editorResized() { resizeSettle = 4; }   // le cache du fond sera refait quand la taille sera stable
+    void initCaches() { resizeSettle = 0; updateBackgroundCache (true); }
 
     void paintOverChildren (juce::Graphics& g) override
     {
@@ -495,9 +511,49 @@ private:
               || presetBlink != o.presetBlink || presetBlinkOn != o.presetBlinkOn; }
     };
 
+    // repaint d'une zone avec suivi pour le chien de garde
+    void askRepaint (juce::Rectangle<int> r)
+    {
+        if (repaintAskedMs <= 0.0) repaintAskedMs = juce::Time::getMillisecondCounterHiRes();
+        repaint (r);
+    }
+
+    // fond mis à l'échelle exacte de l'écran (taille de la fenêtre x échelle Windows / Retina) : timer seulement
+    void updateBackgroundCache (bool force = false)
+    {
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        if (force || (resizeSettle == 0 && now - lastScaleCheckMs > 250.0))
+        {
+            lastScaleCheckMs = now;
+            const float sc = juce::Component::getApproximateScaleFactorForComponent (&editor);
+            if (std::abs (sc - displayScale) > 0.001f) { displayScale = sc; force = true; }
+        }
+        if (resizeSettle > 0 && --resizeSettle == 0) force = true;
+        if (! force || editor.getWidth() <= 0) return;
+        const float px = (float) editor.getWidth() / (float) kW * displayScale;
+        const int tw = juce::jlimit (64, kW * 3, (int) std::lround (kW * px));
+        const int th = juce::jlimit (48, kH * 3, (int) std::lround (kH * px));
+        if (! bgCache.isValid() || bgCache.getWidth() != tw || bgCache.getHeight() != th)
+        {
+            bgCache = (tw == kW && th == kH) ? bg : bg.rescaled (tw, th, juce::Graphics::highResamplingQuality);
+            askRepaint (getLocalBounds());
+        }
+    }
+
     void timerCallback() override
     {
-        editor.useSoftwareRenderer();   // au cas où la fenêtre a été recréée par l'hôte (changement d'écran, d'échelle…)
+        editor.checkRenderer();         // fenêtre recréée par l'hôte (changement d'écran, d'échelle…) ou au plus 1 fois / s
+        updateBackgroundCache();
+        // chien de garde : une zone demandée n'a pas été dessinée depuis 1,5 s -> on relance le rendu
+        {
+            const double nowMs = juce::Time::getMillisecondCounterHiRes();
+            if (repaintAskedMs > 0.0 && isShowing() && nowMs - repaintAskedMs > 1500.0 && lastPaintMs < repaintAskedMs)
+            {
+                repaintAskedMs = 0.0;
+                editor.resetRenderer();
+                repaint();
+            }
+        }
 
         State s;
         s.dryFx = roundToIntSafe (proc.apvts.getRawParameterValue (FogIDs::dryFx)->load());
@@ -514,11 +570,11 @@ private:
         {
             if (s.selected != st.selected) knobBubbleUntil = now + 1200;
             st = s;
-            repaint (juce::Rectangle<float> (presetLedX - 24, presetLedY0 - 24, 48, presetLedDY * 8 + 30).toNearestInt());
-            repaint (juce::Rectangle<int> (60, 60).withCentre (dryLed.toInt()));
-            repaint (juce::Rectangle<int> (60, 60).withCentre (qLed.toInt()));
-            repaint (juce::Rectangle<int> (56, 56).withCentre (redPreset.toInt()));
-            repaint (juce::Rectangle<int> (56, 56).withCentre (redBypass.toInt()));
+            askRepaint (juce::Rectangle<float> (presetLedX - 24, presetLedY0 - 24, 48, presetLedDY * 8 + 30).toNearestInt());
+            askRepaint (juce::Rectangle<int> (60, 60).withCentre (dryLed.toInt()));
+            askRepaint (juce::Rectangle<int> (60, 60).withCentre (qLed.toInt()));
+            askRepaint (juce::Rectangle<int> (56, 56).withCentre (redPreset.toInt()));
+            askRepaint (juce::Rectangle<int> (56, 56).withCentre (redBypass.toInt()));
         }
         // hover tracking for the value bubble
         int hv = -1;
@@ -533,14 +589,19 @@ private:
         if (bubble != drawnBubble)
         {
             drawnBubble = bubble;
-            if (! lastBubble.isEmpty()) repaint (lastBubble);
-            repaint (juce::Rectangle<int> (0, 100, kW, 460));       // fader / knob zone
-            repaint (juce::Rectangle<int> (420, 480, 500, 80));
+            if (! lastBubble.isEmpty()) askRepaint (lastBubble);
+            askRepaint (juce::Rectangle<int> (0, 100, kW, 460));       // fader / knob zone
+            askRepaint (juce::Rectangle<int> (420, 480, 500, 80));
         }
     }
     static int roundToIntSafe (float v) { return juce::jlimit (0, 3, juce::roundToInt (v)); }
 
     juce::Image bg;
+    // anti-gel v2
+    juce::Image bgCache;                  // fond à la taille réelle en pixels, refait par le timer seulement
+    int resizeSettle = 0;                 // ticks avant de refaire le cache après un redimensionnement
+    float displayScale = -1.0f;
+    double lastScaleCheckMs = 0.0, lastPaintMs = 0.0, repaintAskedMs = 0.0;
     FaderLnF lnf;
     juce::OwnedArray<Fader> faders;
     juce::OwnedArray<juce::AudioProcessorValueTreeState::SliderAttachment> atts;
@@ -637,7 +698,9 @@ FogEditor::FogEditor (FogProcessor& p) : AudioProcessorEditor (p), proc (p)
     setResizeLimits (juce::roundToInt (kBaseW * kDefaultScale), juce::roundToInt (kBaseH * kDefaultScale),
                      juce::roundToInt (kBaseW * kMaxScale),     juce::roundToInt (kBaseH * kMaxScale));
     getConstrainer()->setFixedAspectRatio ((double) kW / (double) kH);
+    setOpaque (true);              // anti-gel : l'hôte ne redessine jamais ce qui est derrière la fenêtre
     setScale (proc.uiScale.load());
+    content->initCaches();
 }
 
 FogEditor::~FogEditor() = default;
@@ -645,10 +708,22 @@ FogEditor::~FogEditor() = default;
 // Anti-gel de la fenêtre (Windows) : JUCE 8 dessine par défaut avec Direct2D (carte graphique).
 // Avec certains pilotes (Intel notamment) la fenêtre du plugin cesse de se rafraîchir alors que
 // le DAW continue de tourner. Le moteur logiciel est stable partout et largement assez rapide ici.
+// =============================================================================
+// Anti-gel v2 (Studio Wiga) :
+//  1. moteur de rendu logiciel forcé sur Windows (Direct2D peut figer la fenêtre dans certains hôtes),
+//     appliqué à chaque nouvelle fenêtre hôte (peer) et revérifié toutes les secondes, jamais en boucle ;
+//  2. aucun calcul lourd dans paint() : le fond mis à l'échelle de l'écran est refait par le timer seulement,
+//     après stabilisation de la taille ou quand l'échelle d'affichage change (au plus toutes les 250 ms) ;
+//  3. chien de garde : si un redessin demandé n'est pas arrivé au bout de 1,5 s alors que la fenêtre est
+//     visible, le moteur de rendu est réappliqué et toute la fenêtre est redessinée ;
+//  4. côté audio : aucun appel à l'hôte depuis le thread audio (voir PluginProcessor).
 void FogEditor::useSoftwareRenderer()
 {
+    auto* peer = getPeer();
+    if ((void*) peer != lastPeer) { lastPeer = (void*) peer; repaint(); }
+    lastRendererCheckMs = juce::Time::getMillisecondCounterHiRes();
    #if JUCE_WINDOWS
-    if (auto* peer = getPeer())
+    if (peer != nullptr)
     {
         int sw = peer->getAvailableRenderingEngines().indexOf ("Software Renderer");
         if (sw < 0) sw = 0;
@@ -658,14 +733,40 @@ void FogEditor::useSoftwareRenderer()
    #endif
 }
 
+void FogEditor::checkRenderer()
+{
+    if ((void*) getPeer() != lastPeer || juce::Time::getMillisecondCounterHiRes() - lastRendererCheckMs > 1000.0)
+        useSoftwareRenderer();
+}
+
+void FogEditor::resetRenderer()
+{
+    lastPeer = nullptr;
+    useSoftwareRenderer();
+    repaint();
+}
+
+void FogEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colours::black);    // la pédale recouvre tout ; fenêtre opaque
+}
+
 void FogEditor::parentHierarchyChanged()
 {
     useSoftwareRenderer();
 }
 
+void FogEditor::visibilityChanged()
+{
+    useSoftwareRenderer();
+    if (isShowing()) repaint();
+}
+
 void FogEditor::resized()
 {
+    // anti-gel : jamais de setSize ici, les limites du constrainer suffisent ; le cache du fond est refait par le timer
     content->setTransform (juce::AffineTransform::scale ((float) getWidth() / (float) kW));
+    content->editorResized();
     proc.uiScale = juce::jlimit (kDefaultScale, kMaxScale, getScale());
 }
 

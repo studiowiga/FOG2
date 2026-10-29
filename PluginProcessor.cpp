@@ -48,10 +48,15 @@ FogProcessor::FogProcessor()
     for (int i = 0; i < 8; ++i) raw[(size_t) i] = apvts.getRawParameterValue (FogIDs::faders[i]);
     rawDryFx = apvts.getRawParameterValue (FogIDs::dryFx);
     rawQ     = apvts.getRawParameterValue (FogIDs::q);
+    rawBypass = apvts.getRawParameterValue (FogIDs::bypass);
     bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter (FogIDs::bypass));
     restoreFactorySlots();
     loaded = 0;
+    for (int i = 0; i < numQueued; ++i) { pendingValue[i] = 0.0f; pendingSet[i] = false; }
+    startTimerHz (60);   // anti-gel v2 : aucun appel à l'hôte depuis le thread audio
 }
+
+FogProcessor::~FogProcessor() { stopTimer(); }
 
 // host preset menu (the drop-down of the plug-in window) = the 12 factory sounds
 int FogProcessor::getNumPrograms() { return (int) getFactoryPresets().size(); }
@@ -65,7 +70,7 @@ void FogProcessor::setCurrentProgram (int i)
     if (! juce::isPositiveAndBelow (i, getNumPrograms()) || i == currentProgram.load()) return;
     currentProgram = i;
     if (juce::MessageManager::getInstance()->isThisTheMessageThread()) applyFactory (i);
-    else { pendingFactory = i; triggerAsyncUpdate(); }
+    else pendingFactory = i;                       // appliqué par le timer du processeur
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout FogProcessor::createLayout()
@@ -136,27 +141,35 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
             {
                 if (lt == 1) ccPreset = cc; else ccBypass = cc;
                 if (ccPreset.load() == ccBypass.load()) { if (lt == 1) ccBypass = -1; else ccPreset = -1; }
-                learnTarget = 0; lastCcVal[cc] = val; triggerAsyncUpdate(); continue;
+                learnTarget = 0; lastCcVal[cc] = val; continue;
             }
             const bool wasOn = lastCcVal[cc] >= 64, isOn = val >= 64;
             lastCcVal[cc] = val;
             const bool fire = latchingPedals.load() ? (wasOn != isOn) : (isOn && ! wasOn);
-            if (fire && cc == ccPreset.load()) { ++pendingPresetPress; triggerAsyncUpdate(); }
-            if (fire && cc == ccBypass.load()) { ++pendingBypass;      triggerAsyncUpdate(); }
+            // anti-gel v2 : rien n'est envoyé à l'hôte d'ici, le timer du processeur s'en charge
+            if (fire && cc == ccPreset.load()) ++pendingPresetPress;
+            if (fire && cc == ccBypass.load())
+            {
+                // bascule : valeur déjà en file si elle existe, sinon valeur courante
+                const float cur = pendingSet[0].load (std::memory_order_acquire) ? pendingValue[0].load (std::memory_order_relaxed)
+                                                                                 : rawBypass->load (std::memory_order_relaxed);
+                pendingValue[0].store (cur > 0.5f ? 0.0f : 1.0f, std::memory_order_relaxed);
+                pendingSet[0].store (true, std::memory_order_release);
+            }
         }
         else if (m.isProgramChange() && m.getProgramChangeNumber() < 8)
         {
-            pendingProgram = m.getProgramChangeNumber(); triggerAsyncUpdate();
+            pendingProgram = m.getProgramChangeNumber();
         }
     }
 
     // ---------------- parameters ----------------
-    for (int i = 0; i < 8; ++i) sm[(size_t) i].setTargetValue (raw[(size_t) i]->load());
-    const int dryFx = juce::jlimit (0, 3, (int) std::lround (rawDryFx->load()));
-    const int qIdx  = juce::jlimit (0, 3, (int) std::lround (rawQ->load()));
-    bypassMix.setTargetValue (bypassParam->get() ? 1.0f : 0.0f);
+    for (int i = 0; i < 8; ++i) sm[(size_t) i].setTargetValue (raw[(size_t) i]->load (std::memory_order_relaxed));
+    const int dryFx = juce::jlimit (0, 3, (int) std::lround (rawDryFx->load (std::memory_order_relaxed)));
+    const int qIdx  = juce::jlimit (0, 3, (int) std::lround (rawQ->load (std::memory_order_relaxed)));
+    bypassMix.setTargetValue (rawBypass->load (std::memory_order_relaxed) > 0.5f ? 1.0f : 0.0f);
 
-    const float attSec = attackSeconds (raw[5]->load());
+    const float attSec = attackSeconds (raw[5]->load (std::memory_order_relaxed));
     const float qv = qValues[qIdx];
     const float qComp = 1.0f / (1.0f + 0.11f * (qv - 0.707f));
 
@@ -197,7 +210,7 @@ void FogProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
     const int   idleFreezeLen = (int) (2.0 * sr);
     const float susC = 1.0f - std::exp (-1.0f / (0.030f * (float) sr));
     const float holdDecay = std::pow (10.0f, -4.0f / 20.0f / (float) sr);        // the held level fades 4 dB/s
-    const float attNorm = juce::jlimit (0.0f, 1.0f, (raw[5]->load() - 0.02f) / 0.98f);
+    const float attNorm = juce::jlimit (0.0f, 1.0f, (raw[5]->load (std::memory_order_relaxed) - 0.02f) / 0.98f);
     const float susMax = 1.0f + 2.0f * attNorm;                                    // up to about +9.5 dB
 
     float* outL = buffer.getWritePointer (0);
@@ -384,14 +397,25 @@ bool FogProcessor::isModified() const
     return cur.dryFx != p.dryFx || cur.q != p.q;
 }
 
-void FogProcessor::handleAsyncUpdate()
+// Anti-gel v2 (Studio Wiga) : jamais d'appel à l'hôte (setValueNotifyingHost, triggerAsyncUpdate) depuis le thread audio.
+// Le MIDI met ses demandes en file (pendingValue / pendingSet, compteurs) ; ce timer (60 Hz, thread de messages)
+// les transmet au DAW et à la fenêtre.
+const char* FogProcessor::queuedId (int i)
+{
+    static const char* ids[numQueued] = { FogIDs::bypass };
+    return ids[juce::jlimit (0, numQueued - 1, i)];
+}
+
+void FogProcessor::timerCallback()
 {
     const int pf = pendingFactory.exchange (-1);
     if (pf >= 0) applyFactory (pf);
     const int pg = pendingProgram.exchange (-1);
     if (pg >= 0) loadPreset (pg);
     for (int k = pendingPresetPress.exchange (0); k > 0; --k) presetFootswitch();
-    for (int k = pendingBypass.exchange (0); k > 0; --k) toggleBypass();
+    for (int i = 0; i < numQueued; ++i)
+        if (pendingSet[i].exchange (false, std::memory_order_acquire))
+            setParam (queuedId (i), pendingValue[i].load (std::memory_order_relaxed));
 }
 
 // ============================================================================

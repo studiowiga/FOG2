@@ -2,6 +2,8 @@
 
 Plugin VST3 (Windows 64 bits + macOS universel Apple Silicon/Intel) qui copie la pédale **Electro-Harmonix POG2** (Polyphonic Octave Generator), sur le visuel « FOGZ ».
 
+v1.3.0 : anti-gel v2 (JUCE 8.0.15, caches refaits par le timer, chien de garde, aucun appel à l'hôte depuis le thread audio)
+
 ## Compiler avec GitHub
 1. Mets **tous les fichiers à la racine du dépôt** (avec le dossier `.github/workflows`).
 2. Un push lance l'onglet **Actions** → *Build Fog Z VST3 (Windows + macOS)*.

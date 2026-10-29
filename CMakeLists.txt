@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "")
 
-project(FogZ VERSION 1.2.3)
+project(FogZ VERSION 1.3.0)
 
 # Local builds can point to an existing JUCE checkout:  cmake -B build -DJUCE_DIR=/path/to/JUCE
 if(DEFINED JUCE_DIR)
@@ -13,7 +13,7 @@ else()
   include(FetchContent)
   FetchContent_Declare(JUCE
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG 8.0.4
+    GIT_TAG 8.0.15
     GIT_SHALLOW ON)
   FetchContent_MakeAvailable(JUCE)
 endif()
